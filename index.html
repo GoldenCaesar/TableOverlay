@@ -188,7 +188,7 @@
         let farmedCircles = [];
         let fishermen = []; // NEW: For fishing game
         let fish = []; // NEW: For fishing game
-        let projectileQueue = []; 
+        let projectileQueue = [];
         let playerCounter = 1;
         let isAddingPlayer = false;
         let isRemovingPlayer = false;
@@ -242,7 +242,7 @@
             players.forEach(player => {
                 ctx.fillStyle = player.color;
                 ctx.fillRect(player.x, player.y, playerSize, playerSize);
-                ctx.fillStyle = 'black'; 
+                ctx.fillStyle = 'black';
                 ctx.font = 'bold 14px Inter';
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
@@ -317,16 +317,16 @@
                 if (roll >= 15) {
                     const enemy = enemies[Math.floor(Math.random() * enemies.length)];
                     const path = generateRandomPath({ x: p1.x + playerSize / 2, y: p1.y + playerSize / 2 }, { x: enemy.x + playerSize / 2, y: enemy.y + playerSize / 2 });
-                    projectileQueue.push({ 
-                        color: p1.color, sourcePlayerId: p1.id, path, speed: p1.speed, 
-                        isLarge: true, health: 20, scoreValue: 20, radius: 10 
+                    projectileQueue.push({
+                        color: p1.color, sourcePlayerId: p1.id, path, speed: p1.speed,
+                        isLarge: true, health: 20, scoreValue: 20, radius: 10
                     });
                 } else {
                     let assignments = new Array(enemies.length).fill(0); for (let i = 0; i < roll; i++) assignments[i % enemies.length]++;
                     enemies.forEach((enemy, i) => {
                         const path = generateRandomPath({ x: p1.x + playerSize / 2, y: p1.y + playerSize / 2 }, { x: enemy.x + playerSize / 2, y: enemy.y + playerSize / 2 });
                         for (let j = 0; j < assignments[i]; j++) {
-                            projectileQueue.push({ 
+                            projectileQueue.push({
                                 color: p1.color, sourcePlayerId: p1.id, path, speed: p1.speed,
                                 isLarge: false, health: 1, scoreValue: 1, radius: projectileRadius
                             });
@@ -401,23 +401,39 @@
             let angle = Math.random() * Math.PI * 2;
             const ownerCenter = { x: owner.x + (owner.size || playerSize) / 2, y: owner.y + (owner.size || playerSize) / 2 };
 
-            for (let i = 0; i < 200; i++) {
+            for (let i = 0; i < 300; i++) { // Increased iterations for denser spiral
                 const potX = ownerCenter.x + Math.cos(angle) * distance;
                 const potY = ownerCenter.y + Math.sin(angle) * distance;
+
+                // Check bounds first
                 if (potX - newRadius < 0 || potX + newRadius > canvas.width || potY - newRadius < 0 || potY + newRadius > canvas.height) {
-                    angle += 0.5; if (angle > Math.PI * 2 * (i / 50 + 1)) distance += newRadius; continue;
+                    angle += 0.2; // Tighter angle step
+                    if (i > 0 && i % 100 === 0) distance += newRadius * 0.5; // Slower distance increase
+                    continue;
                 }
+
                 const potentialCircle = { x: potX, y: potY, radius: newRadius };
                 let isOverlapping = false;
                 for (const obj of existingObjects) {
-                    if (Math.hypot(obj.x - potX, obj.y - potY) < obj.radius + newRadius) { isOverlapping = true; break; }
+                    // Check for overlap with existing objects
+                    if (Math.hypot(obj.x - potX, obj.y - potY) < obj.radius + newRadius) {
+                        isOverlapping = true;
+                        break;
+                    }
                 }
-                if (!isOverlapping) return potentialCircle;
-                angle += 0.5; if (angle > Math.PI * 2 * (i / 50 + 1)) distance += newRadius;
+
+                if (!isOverlapping) {
+                    return potentialCircle; // Found a spot
+                }
+
+                angle += 0.2; // Tighter angle step
+                if (i > 0 && i % 100 === 0) {
+                    distance += newRadius * 0.5; // Slower distance increase
+                }
             }
             return null; // No position found
         };
-        
+
         // --- Farming Game Logic ---
         const addFarmedCircle = (player) => {
             const pos = findOpenPosition(player, farmedCircleRadius, farmedCircles);
@@ -449,29 +465,52 @@
         const addFish = (fisherman) => {
             const ownerFish = fish.filter(f => f.ownerId === fisherman.ownerId);
             const pos = findOpenPosition({ ...fisherman, size: fisherman.radius * 2 }, projectileRadius, ownerFish);
-            if (pos) fish.push({ id: Date.now() + Math.random(), ...pos, color: fisherman.color, ownerId: fisherman.ownerId });
-            else showMessage(`Fisherman for ${players.find(p=>p.id===fisherman.ownerId).name} is out of space!`, 'error');
+            if (pos) {
+                // Add targetEnemyId for future delivery assignment and fix missing radius
+                fish.push({ id: Date.now() + Math.random(), ...pos, radius: projectileRadius, color: fisherman.color, ownerId: fisherman.ownerId, targetEnemyId: null });
+            } else {
+                showMessage(`Fisherman for ${players.find(p=>p.id===fisherman.ownerId).name} is out of space!`, 'error');
+            }
         };
 
         const startDelivery = (fisherman) => {
-            fisherman.isDelivering = true;
             const enemies = players.filter(p => p.id !== fisherman.ownerId);
-            if (enemies.length === 0) { fisherman.isDelivering = false; return; }
-            
-            let deliveryQueue = [];
-            for (let i = 0; i < 20; i++) {
-                deliveryQueue.push(enemies[i % enemies.length]);
+            const ownerName = players.find(p => p.id === fisherman.ownerId).name;
+
+            if (enemies.length === 0) {
+                showMessage(`No one for ${ownerName} to deliver to! Fish reset.`, 'info');
+                fish = fish.filter(f => f.ownerId !== fisherman.ownerId); // Clear this fisherman's fish
+                fisherman.fishCount = 0;
+                return;
             }
-            fisherman.deliveryQueue = deliveryQueue;
-            const firstTarget = fisherman.deliveryQueue[0];
-            fisherman.path = generateRandomPath({x: fisherman.x, y: fisherman.y}, {x: firstTarget.x + playerSize/2, y: firstTarget.y + playerSize/2});
+
+            // Get the 20 (or more) fish for this fisherman
+            const fishermanFish = fish.filter(f => f.ownerId === fisherman.ownerId && f.targetEnemyId === null).slice(0, 20);
+
+            // Assign each fish to an enemy, dividing them as equally as possible
+            fishermanFish.forEach((f, index) => {
+                const enemyForThisFish = enemies[index % enemies.length];
+                f.targetEnemyId = enemyForThisFish.id;
+            });
+
+            fisherman.state = 'delivering';
+            fisherman.deliveryEnemies = enemies;
+            fisherman.currentEnemyIndex = 0;
+
+            // Start path to the first enemy
+            const firstEnemy = enemies[0];
+            const targetCenter = { x: firstEnemy.x + playerSize / 2, y: firstEnemy.y + playerSize / 2 };
+            fisherman.path = generateRandomPath({ x: fisherman.x, y: fisherman.y }, targetCenter);
             fisherman.progress = 0;
+
+            showMessage(`${ownerName}'s fisherman begins its delivery run!`, 'success');
         };
 
         const fishingTurn = () => {
             players.forEach((player, index) => {
                 const fisherman = fishermen.find(f => f.ownerId === player.id);
-                if (!fisherman || fisherman.isDelivering) return;
+                // Check new state property to ensure fisherman is available
+                if (!fisherman || fisherman.state !== 'fishing') return;
 
                 setTimeout(() => {
                     const roll = Math.floor(Math.random() * 20) + 1;
@@ -483,7 +522,7 @@
                             fisherman.fishCount++;
                             showMessage(`${player.name} caught a fish! (${fisherman.fishCount}/20)`, 'success');
                             if (fisherman.fishCount >= 20) {
-                                showMessage(`${player.name}'s fisherman is delivering fish!`, 'info');
+                                showMessage(`${player.name}'s fisherman is preparing to deliver fish!`, 'info');
                                 startDelivery(fisherman);
                             }
                             draw();
@@ -495,39 +534,92 @@
         };
 
         const fishingGameLoop = () => {
+            // Handle fisherman movement and state changes
             fishermen.forEach(f => {
-                if (f.isDelivering) {
+                if (f.state === 'delivering' || f.state === 'returning') {
+                    // Move fisherman along path
                     f.progress += FISHERMAN_SPEED;
                     const newPos = getPointOnBezierCurve(f.path, f.progress);
                     f.x = newPos.x;
                     f.y = newPos.y;
 
+                    // Check if path is complete
                     if (f.progress >= 1) {
-                        const deliveredTo = f.deliveryQueue.shift();
-                        const fishToDeliver = fish.find(fishie => fishie.ownerId === f.ownerId);
-                        if (fishToDeliver && deliveredTo) {
-                            const path = generateRandomPath({x: fishToDeliver.x, y: fishToDeliver.y}, {x: deliveredTo.x + playerSize/2, y: deliveredTo.y + playerSize/2});
-                            projectileQueue.push({ color: f.color, sourcePlayerId: f.ownerId, path, speed: DEFAULT_PROJECTILE_SPEED });
-                            fish = fish.filter(fishie => fishie.id !== fishToDeliver.id);
-                        }
-                        
-                        if (f.deliveryQueue.length > 0) {
-                            const nextTarget = f.deliveryQueue[0];
-                            f.path = generateRandomPath({x: f.x, y: f.y}, {x: nextTarget.x + playerSize/2, y: nextTarget.y + playerSize/2});
+                        const ownerName = players.find(p => p.id === f.ownerId).name;
+                        if (f.state === 'delivering') {
+                            // Reached an enemy, now return home
+                            f.state = 'returning';
+                            f.path = generateRandomPath({ x: f.x, y: f.y }, { x: f.homeX, y: f.homeY });
                             f.progress = 0;
-                        } else {
-                            f.path = generateRandomPath({x: f.x, y: f.y}, {x: f.homeX, y: f.homeY});
-                            f.progress = 0;
-                            f.isReturning = true; // Flag that it's on its way home
+                            const enemyName = players.find(p => p.id === f.deliveryEnemies[f.currentEnemyIndex].id).name;
+                            showMessage(`${ownerName}'s fisherman delivered to ${enemyName} and is returning.`, 'info');
+                        } else { // state === 'returning'
+                            // Returned home, check for next enemy
+                            f.currentEnemyIndex++;
+                            if (f.currentEnemyIndex < f.deliveryEnemies.length) {
+                                // There's another enemy, go deliver to them
+                                f.state = 'delivering';
+                                const nextEnemy = f.deliveryEnemies[f.currentEnemyIndex];
+                                const targetCenter = { x: nextEnemy.x + playerSize / 2, y: nextEnemy.y + playerSize / 2 };
+                                f.path = generateRandomPath({ x: f.x, y: f.y }, targetCenter);
+                                f.progress = 0;
+                            } else {
+                                // All deliveries are done, go back to fishing
+                                showMessage(`${ownerName}'s fisherman has completed its run!`, 'success');
+                                f.state = 'fishing';
+                                f.fishCount = 0;
+                                f.deliveryEnemies = [];
+                                f.currentEnemyIndex = -1;
+                                f.path = null;
+                                f.progress = 0;
+                            }
                         }
                     }
-                } else if (f.isReturning && f.progress >= 1) {
-                    f.isReturning = false;
-                    f.isDelivering = false;
-                    f.fishCount = 0;
-                    showMessage(`Fisherman for ${players.find(p=>p.id===f.ownerId).name} has returned.`, 'info');
                 }
             });
+
+            // Handle fish movement and scoring
+            let fishToRemove = new Set();
+            fish.forEach(f => {
+                if (f.targetEnemyId) {
+                    const fisherman = fishermen.find(fm => fm.ownerId === f.ownerId);
+                    // Ensure fisherman and their delivery target exist
+                    if (!fisherman || fisherman.currentEnemyIndex === -1 || !fisherman.deliveryEnemies[fisherman.currentEnemyIndex]) return;
+
+                    const currentTargetEnemy = fisherman.deliveryEnemies[fisherman.currentEnemyIndex];
+
+                    // Make fish follow the fisherman if it's their turn to be delivered
+                    if (f.targetEnemyId === currentTargetEnemy.id) {
+                        const dx = fisherman.x - f.x;
+                        const dy = fisherman.y - f.y;
+                        const distance = Math.hypot(dx, dy);
+                        // Move towards the fisherman, but don't get too close
+                        if (distance > fisherman.radius * 2.5) { // Keep a small distance
+                            f.x += dx * 0.08; // Adjust multiplier for different following speed
+                            f.y += dy * 0.08;
+                        }
+
+                        // Check for collision with the target player
+                        const targetPlayer = players.find(p => p.id === f.targetEnemyId);
+                        if (targetPlayer &&
+                            f.x > targetPlayer.x && f.x < targetPlayer.x + playerSize &&
+                            f.y > targetPlayer.y && f.y < targetPlayer.y + playerSize)
+                        {
+                            const owner = players.find(p => p.id === f.ownerId);
+                            if (owner) {
+                                owner.score += 10; // 10 points per fish
+                                showMessage(`${owner.name} scored! +10 points.`, 'success');
+                            }
+                            fishToRemove.add(f.id);
+                        }
+                    }
+                }
+            });
+
+            // Remove fish that have scored
+            if (fishToRemove.size > 0) {
+                fish = fish.filter(f => !fishToRemove.has(f.id));
+            }
         };
 
         // --- Main Game Control ---
@@ -541,7 +633,22 @@
             players.forEach(player => {
                 const pos = findOpenPosition(player, fishermanRadius, fishermen);
                 if (pos) {
-                    fishermen.push({ ...pos, id: Date.now() + player.id, ownerId: player.id, radius: fishermanRadius, color: player.color, fishCount: 0, isDelivering: false, homeX: pos.x, homeY: pos.y });
+                    // Add new state properties for the fisherman
+                    fishermen.push({
+                        ...pos,
+                        id: Date.now() + player.id,
+                        ownerId: player.id,
+                        radius: fishermanRadius,
+                        color: player.color,
+                        fishCount: 0,
+                        state: 'fishing', // 'fishing', 'delivering', 'returning'
+                        homeX: pos.x,
+                        homeY: pos.y,
+                        path: null,
+                        progress: 0,
+                        deliveryEnemies: [],
+                        currentEnemyIndex: -1
+                    });
                 }
             });
             gameTurnInterval = setInterval(fishingTurn, 1000);
@@ -576,7 +683,7 @@
             renderShopItems();
             setupBallGame_full();
         };
-        
+
         const switchToNextMode = () => {
             clearGameState();
             currentModeIndex = (currentModeIndex + 1) % gameModes.length;
@@ -599,7 +706,7 @@
             renderShopItems();
             draw();
         };
-        
+
         // --- Shop Functions ---
         const renderShopItems = () => {
             const currentMode = gameModes[currentModeIndex];
@@ -611,7 +718,7 @@
             slowUpgradeButton.classList.toggle('hidden', !isBall);
             winningNumberUpgradeButton.classList.toggle('hidden', !isFarming);
             luckyChanceUpgradeButton.classList.toggle('hidden', !isFarming);
-            
+
             if (!isGameRunning) {
                 speedUpgradeButton.classList.remove('hidden');
                 slowUpgradeButton.classList.remove('hidden');
@@ -623,7 +730,7 @@
         const buySlowUpgrade = () => { /* ... (logic unchanged) ... */ };
         const buyWinningNumberUpgrade = () => { /* ... (logic unchanged) ... */ };
         const buyLuckyChanceUpgrade = () => { /* ... (logic unchanged) ... */ };
-        
+
         // Full shop logic (unchanged)
         const renderShopSelector_full = () => {
             playerSelectorContainer.innerHTML = '';
