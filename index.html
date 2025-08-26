@@ -231,6 +231,13 @@
 
         const draw = () => {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Set shadow for all elements
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
+            ctx.shadowBlur = 5;
+            ctx.shadowOffsetX = 3;
+            ctx.shadowOffsetY = 3;
+
             // Draw Players
             players.forEach(player => {
                 ctx.fillStyle = player.color;
@@ -253,6 +260,12 @@
             farmedCircles.forEach(c => { ctx.beginPath(); ctx.arc(c.x, c.y, c.radius, 0, Math.PI * 2); ctx.fillStyle = c.color; ctx.fill(); });
             fishermen.forEach(f => { ctx.beginPath(); ctx.arc(f.x, f.y, f.radius, 0, Math.PI * 2); ctx.fillStyle = f.color; ctx.fill(); });
             fish.forEach(f => { ctx.beginPath(); ctx.arc(f.x, f.y, f.radius, 0, Math.PI * 2); ctx.fillStyle = f.color; ctx.fill(); });
+
+            // Reset shadow
+            ctx.shadowColor = 'transparent';
+            ctx.shadowBlur = 0;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
         };
 
         // --- Player Management ---
@@ -300,28 +313,82 @@
                 const enemies = players.filter(p2 => p2.id !== p1.id); if (enemies.length === 0) return;
                 const roll = Math.floor(Math.random() * 20) + 1; p1.lastRoll = roll;
                 setTimeout(() => showMessage(`${p1.name} rolls a ${roll}!`), players.indexOf(p1) * 100);
-                let assignments = new Array(enemies.length).fill(0); for (let i = 0; i < roll; i++) assignments[i % enemies.length]++;
-                enemies.forEach((enemy, i) => {
+
+                if (roll >= 15) {
+                    const enemy = enemies[Math.floor(Math.random() * enemies.length)];
                     const path = generateRandomPath({ x: p1.x + playerSize / 2, y: p1.y + playerSize / 2 }, { x: enemy.x + playerSize / 2, y: enemy.y + playerSize / 2 });
-                    for (let j = 0; j < assignments[i]; j++) projectileQueue.push({ color: p1.color, sourcePlayerId: p1.id, path, speed: p1.speed });
-                });
+                    projectileQueue.push({ 
+                        color: p1.color, sourcePlayerId: p1.id, path, speed: p1.speed, 
+                        isLarge: true, health: 20, scoreValue: 20, radius: 10 
+                    });
+                } else {
+                    let assignments = new Array(enemies.length).fill(0); for (let i = 0; i < roll; i++) assignments[i % enemies.length]++;
+                    enemies.forEach((enemy, i) => {
+                        const path = generateRandomPath({ x: p1.x + playerSize / 2, y: p1.y + playerSize / 2 }, { x: enemy.x + playerSize / 2, y: enemy.y + playerSize / 2 });
+                        for (let j = 0; j < assignments[i]; j++) {
+                            projectileQueue.push({ 
+                                color: p1.color, sourcePlayerId: p1.id, path, speed: p1.speed,
+                                isLarge: false, health: 1, scoreValue: 1, radius: projectileRadius
+                            });
+                        }
+                    });
+                }
             });
         };
         const checkCollisions_full = () => {
             let toRemove = new Set();
+            let projectilesToDamage = new Map();
+
             projectiles.forEach(p => {
+                if (toRemove.has(p.id)) return;
                 players.forEach(pl => {
                     if (p.sourcePlayerId !== pl.id && p.x > pl.x && p.x < pl.x + playerSize && p.y > pl.y && p.y < pl.y + playerSize) {
-                        toRemove.add(p.id); const source = players.find(sp => sp.id === p.sourcePlayerId); if (source) source.score++;
+                        toRemove.add(p.id);
+                        const source = players.find(sp => sp.id === p.sourcePlayerId);
+                        if (source) source.score += p.scoreValue || 1;
                     }
                 });
             });
+
+            for (let i = 0; i < projectiles.length; i++) {
+                for (let j = i + 1; j < projectiles.length; j++) {
+                    const p1 = projectiles[i];
+                    const p2 = projectiles[j];
+                    if (p1.sourcePlayerId === p2.sourcePlayerId || toRemove.has(p1.id) || toRemove.has(p2.id)) continue;
+
+                    const dist = Math.hypot(p1.x - p2.x, p1.y - p2.y);
+                    if (dist < (p1.radius || projectileRadius) + (p2.radius || projectileRadius)) {
+                        if (p1.isLarge && !p2.isLarge) {
+                            toRemove.add(p2.id);
+                            projectilesToDamage.set(p1.id, (projectilesToDamage.get(p1.id) || 0) + 1);
+                        } else if (!p1.isLarge && p2.isLarge) {
+                            toRemove.add(p1.id);
+                            projectilesToDamage.set(p2.id, (projectilesToDamage.get(p2.id) || 0) + 1);
+                        } else if (!p1.isLarge && !p2.isLarge) {
+                            toRemove.add(p1.id);
+                            toRemove.add(p2.id);
+                        } else if (p1.isLarge && p2.isLarge) {
+                            projectilesToDamage.set(p1.id, (projectilesToDamage.get(p1.id) || 0) + 10);
+                            projectilesToDamage.set(p2.id, (projectilesToDamage.get(p2.id) || 0) + 10);
+                        }
+                    }
+                }
+            }
+
+            projectilesToDamage.forEach((damage, id) => {
+                const p = projectiles.find(proj => proj.id === id);
+                if (p) {
+                    p.health -= damage;
+                    if (p.health <= 0) toRemove.add(id);
+                }
+            });
+
             projectiles = projectiles.filter(p => !toRemove.has(p.id));
         };
         const ballGameLoop_full = () => {
             if (projectileQueue.length > 0) {
                 const pInfo = projectileQueue.shift();
-                projectiles.push({ id: Date.now() + Math.random(), ...pInfo, x: pInfo.path.start.x, y: pInfo.path.start.y, radius: projectileRadius, progress: 0 });
+                projectiles.push({ id: Date.now() + Math.random(), ...pInfo, x: pInfo.path.start.x, y: pInfo.path.start.y, progress: 0 });
             }
             projectiles.forEach(p => { const newPos = getPointOnBezierCurve(p.path, p.progress += p.speed); p.x = newPos.x; p.y = newPos.y; });
             projectiles = projectiles.filter(p => p.progress < 1);
@@ -477,7 +544,7 @@
                     fishermen.push({ ...pos, id: Date.now() + player.id, ownerId: player.id, radius: fishermanRadius, color: player.color, fishCount: 0, isDelivering: false, homeX: pos.x, homeY: pos.y });
                 }
             });
-            gameTurnInterval = setInterval(fishingTurn, 10000);
+            gameTurnInterval = setInterval(fishingTurn, 1000);
             gameLoopInterval = setInterval(() => { fishingGameLoop(); ballGameLoop_full(); draw(); }, 1000 / 60);
             fishingTurn();
             draw();
