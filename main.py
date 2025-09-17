@@ -427,7 +427,8 @@ class AudioMetadataEditor(tk.Tk):
                 list_path = os.path.join(temp_dir, "concat_list.txt")
                 with open(list_path, "w", encoding="utf-8") as f:
                     for chunk_path in temp_chunk_files:
-                        f.write(f"file '{chunk_path.replace('\'', ''''''''')}'\n")
+                        escaped_chunk = chunk_path.replace("'", "\\'")
+                        f.write(f"file '{escaped_chunk}'\n")
 
                 concatenated_path = os.path.join(temp_dir, "concatenated.mp3")
                 concat_cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_path, "-c", "copy", concatenated_path]
