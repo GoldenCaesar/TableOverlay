@@ -200,19 +200,34 @@ class AudioMetadataEditor(tk.Tk):
             logging.info("Processing cancelled, no output folder selected.")
             return
 
+        items = self.tree.get_children('')
+        if not items:
+            messagebox.showinfo("No files", "There are no files to process.")
+            return
+
         logging.info(f"Starting to process files. Output folder: {output_folder}")
 
         self.progress_window = tk.Toplevel(self)
         self.progress_window.title("Processing...")
-        self.progress_label = ttk.Label(self.progress_window, text="Starting processing...")
-        self.progress_label.pack(padx=20, pady=10)
-        self.progress_bar = ttk.Progressbar(self.progress_window, orient="horizontal", length=300, mode="determinate")
-        self.progress_bar.pack(padx=20, pady=10)
+
+        ttk.Label(self.progress_window, text="Total Progress").pack(padx=20, pady=(10, 0))
+        self.total_progress_label = ttk.Label(self.progress_window, text="Starting processing...")
+        self.total_progress_label.pack(padx=20, pady=5)
+        self.total_progress_bar = ttk.Progressbar(self.progress_window, orient="horizontal", length=400, mode="determinate", maximum=len(items))
+        self.total_progress_bar.pack(padx=20, pady=(0, 10))
+
+        self.sub_task_label = ttk.Label(self.progress_window, text="")
+        self.sub_task_label.pack(padx=20, pady=(10, 0))
+        self.sub_task_progress_bar = ttk.Progressbar(self.progress_window, orient="horizontal", length=400, mode="determinate")
+        self.sub_task_progress_bar.pack(padx=20, pady=(5, 10))
+
+        self.sub_task_label.pack_forget()
+        self.sub_task_progress_bar.pack_forget()
 
         self.queue = queue.Queue()
         self.check_queue()
 
-        processing_thread = threading.Thread(target=self.processing_thread, args=(output_folder, self.queue))
+        processing_thread = threading.Thread(target=self.processing_thread, args=(output_folder, self.queue, items))
         processing_thread.start()
 
     def check_queue(self):
@@ -220,10 +235,24 @@ class AudioMetadataEditor(tk.Tk):
             message = self.queue.get_nowait()
             if message[0] == 'progress':
                 _, text, value = message
-                self.progress_label.config(text=text)
-                self.progress_bar['value'] = value
+                self.total_progress_label.config(text=text)
+                self.total_progress_bar['value'] = value
+            elif message[0] == 'sub_task_start':
+                _, label, max_value = message
+                self.sub_task_label.config(text=label)
+                self.sub_task_progress_bar.config(maximum=max_value, value=0)
+                self.sub_task_label.pack(padx=20, pady=(10, 0))
+                self.sub_task_progress_bar.pack(padx=20, pady=(5, 10))
+            elif message[0] == 'sub_task_progress':
+                _, value = message
+                self.sub_task_progress_bar['value'] = value
+            elif message[0] == 'sub_task_end':
+                self.sub_task_label.pack_forget()
+                self.sub_task_progress_bar.pack_forget()
             elif message[0] == 'complete':
-                self.progress_label.config(text="Processing complete!")
+                self.total_progress_label.config(text="Processing complete!")
+                self.sub_task_label.pack_forget()
+                self.sub_task_progress_bar.pack_forget()
                 self.progress_window.after(2000, self.progress_window.destroy)
                 return # Stop checking
             elif message[0] == 'error':
@@ -235,9 +264,8 @@ class AudioMetadataEditor(tk.Tk):
         self.after(100, self.check_queue)
 
 
-    def processing_thread(self, output_folder, q):
+    def processing_thread(self, output_folder, q, items):
         logging.info("Processing thread started.")
-        items = self.tree.get_children('')
         total_files = len(items)
         logging.info(f"Found {total_files} file(s) to process.")
 
@@ -246,7 +274,7 @@ class AudioMetadataEditor(tk.Tk):
             filename = os.path.basename(full_path)
             logging.info(f"[{i+1}/{total_files}] Starting processing for: {filename}")
 
-            q.put(('progress', f"Processing {filename}...", i))
+            q.put(('progress', f"Processing {i+1}/{total_files}: {filename}...", i + 1))
 
             values = self.tree.item(item_id, "values")
 
@@ -265,7 +293,7 @@ class AudioMetadataEditor(tk.Tk):
             output_path = os.path.join(output_folder, output_filename)
 
             try:
-                self.process_single_file(full_path, output_path, new_metadata, trim_intro, trim_outro)
+                self.process_single_file(full_path, output_path, new_metadata, trim_intro, trim_outro, q)
                 logging.info(f"Successfully processed {filename}.")
             except Exception as e:
                 error_message = f"Failed to process {os.path.basename(full_path)}: {e}"
@@ -278,7 +306,7 @@ class AudioMetadataEditor(tk.Tk):
         q.put(('complete',))
 
 
-    def process_single_file(self, input_path, output_path, metadata, trim_intro, trim_outro):
+    def process_single_file(self, input_path, output_path, metadata, trim_intro, trim_outro, q):
         filename = os.path.basename(input_path)
         logging.info(f"Processing details for {filename}: Trim Intro={trim_intro}, Trim Outro={trim_outro}")
 
@@ -306,6 +334,7 @@ class AudioMetadataEditor(tk.Tk):
             chunk_size_s = 10 * 60
             num_chunks = math.ceil(duration / chunk_size_s)
             logging.info(f"Splitting {filename} into {num_chunks} chunk(s) for trimming.")
+            q.put(('sub_task_start', f"Splitting into {num_chunks} chunks...", num_chunks))
 
             temp_chunk_files = []
             for i in range(num_chunks):
@@ -314,6 +343,7 @@ class AudioMetadataEditor(tk.Tk):
 
                 chunk_path = os.path.join(temp_dir, f"chunk{i}.mp3")
                 logging.debug(f"Processing chunk {i} for {filename}.")
+                q.put(('sub_task_progress', i + 1))
 
                 ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_path, "-ss", str(start_time)]
                 ffmpeg_cmd.extend(t_param)
@@ -330,8 +360,11 @@ class AudioMetadataEditor(tk.Tk):
                 subprocess.run(ffmpeg_cmd, check=True, capture_output=True, text=True)
                 temp_chunk_files.append(chunk_path)
 
+            q.put(('sub_task_end',))
+
             list_path = os.path.join(temp_dir, "concat_list.txt")
             logging.info(f"Concatenating {len(temp_chunk_files)} chunk(s) for {filename}.")
+            q.put(('sub_task_start', f"Concatenating {len(temp_chunk_files)} chunks...", 1))
             with open(list_path, "w", encoding="utf-8") as f:
                 for chunk_path in temp_chunk_files:
                     safe_chunk_path = chunk_path.replace("\\", "/")
@@ -347,12 +380,15 @@ class AudioMetadataEditor(tk.Tk):
                 concat_cmd,
                 check=True, capture_output=True, text=True
             )
+            q.put(('sub_task_progress', 1))
+            q.put(('sub_task_end',))
 
             logging.info(f"Copying final processed file to output folder: {output_path}")
             shutil.copy(concatenated_path, output_path)
             self.apply_metadata_to_file(output_path, metadata, input_path)
 
         finally:
+            q.put(('sub_task_end',))
             logging.info(f"Cleaning up temporary directory: {temp_dir}")
             shutil.rmtree(temp_dir)
 
