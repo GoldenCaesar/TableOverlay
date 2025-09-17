@@ -9,6 +9,8 @@ import subprocess
 import shutil
 import math
 import queue
+import sys
+import logging
 
 class AudioMetadataEditor(tk.Tk):
     def __init__(self):
@@ -61,21 +63,13 @@ class AudioMetadataEditor(tk.Tk):
 
         self.tree.bind("<Double-1>", self.on_double_click)
 
-        self.check_ffmpeg()
-
-    def check_ffmpeg(self):
-        try:
-            subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True, text=True)
-            subprocess.run(["ffprobe", "-version"], capture_output=True, check=True, text=True)
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            messagebox.showerror("Error", "ffmpeg and ffprobe not found. Please install ffmpeg and ensure it is in your system's PATH. All file operations will be disabled.")
-            self.process_button.config(state="disabled")
-            self.open_folder_button.config(state="disabled")
-
     def open_folder(self):
         folder_path = filedialog.askdirectory()
         if not folder_path:
+            logging.info("No folder selected.")
             return
+
+        logging.info(f"Opening folder: {folder_path}")
 
         for i in self.tree.get_children():
             self.tree.delete(i)
@@ -85,26 +79,32 @@ class AudioMetadataEditor(tk.Tk):
             if filename.lower().endswith(('.mp3', '.wav', '.flac', '.m4a', '.ogg', '.opus')):
                 filepath = os.path.join(folder_path, filename)
                 self.load_audio_file(filepath)
+        logging.info("Finished loading files from folder.")
 
     def get_audio_duration(self, filepath):
+        logging.debug(f"Getting duration for {filepath}")
         try:
             result = subprocess.run(
                 ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", filepath],
                 capture_output=True, text=True, check=True
             )
-            return float(result.stdout.strip())
+            duration = float(result.stdout.strip())
+            logging.debug(f"Duration for {filepath} is {duration}s.")
+            return duration
         except (subprocess.CalledProcessError, FileNotFoundError, ValueError) as e:
-            print(f"Could not get duration for {filepath}: {e}")
+            logging.error(f"Could not get duration for {filepath}: {e}")
             return 0
 
     def load_audio_file(self, filepath):
+        logging.info(f"Loading audio file: {filepath}")
         try:
             file_size = os.path.getsize(filepath) / (1024 * 1024)
             duration = self.get_audio_duration(filepath)
 
             try:
                 tags = EasyID3(filepath)
-            except:
+            except Exception as e:
+                logging.warning(f"Could not read ID3 tags for {filepath}: {e}")
                 tags = {}
 
             title = tags.get('title', [''])[0]
@@ -126,8 +126,10 @@ class AudioMetadataEditor(tk.Tk):
                 "No"
             ))
             self.file_paths[item_id] = filepath
+            logging.info(f"Successfully loaded {os.path.basename(filepath)}.")
 
         except Exception as e:
+            logging.error(f"Could not load file {os.path.basename(filepath)}: {e}")
             messagebox.showerror("Error", f"Could not load file {os.path.basename(filepath)}: {e}")
 
     def on_double_click(self, event):
@@ -195,7 +197,10 @@ class AudioMetadataEditor(tk.Tk):
     def process_files(self):
         output_folder = filedialog.askdirectory()
         if not output_folder:
+            logging.info("Processing cancelled, no output folder selected.")
             return
+
+        logging.info(f"Starting to process files. Output folder: {output_folder}")
 
         self.progress_window = tk.Toplevel(self)
         self.progress_window.title("Processing...")
@@ -231,13 +236,17 @@ class AudioMetadataEditor(tk.Tk):
 
 
     def processing_thread(self, output_folder, q):
+        logging.info("Processing thread started.")
         items = self.tree.get_children('')
         total_files = len(items)
+        logging.info(f"Found {total_files} file(s) to process.")
 
         for i, item_id in enumerate(items):
             full_path = self.file_paths[item_id]
+            filename = os.path.basename(full_path)
+            logging.info(f"[{i+1}/{total_files}] Starting processing for: {filename}")
 
-            q.put(('progress', f"Processing {os.path.basename(full_path)}...", i))
+            q.put(('progress', f"Processing {filename}...", i))
 
             values = self.tree.item(item_id, "values")
 
@@ -257,29 +266,38 @@ class AudioMetadataEditor(tk.Tk):
 
             try:
                 self.process_single_file(full_path, output_path, new_metadata, trim_intro, trim_outro)
+                logging.info(f"Successfully processed {filename}.")
             except Exception as e:
                 error_message = f"Failed to process {os.path.basename(full_path)}: {e}"
                 if isinstance(e, subprocess.CalledProcessError):
                     error_message += f"\n\nffmpeg error:\n{e.stderr}"
+                logging.error(error_message)
                 q.put(('error', "Processing Error", error_message))
 
+        logging.info("Processing thread finished.")
         q.put(('complete',))
 
 
     def process_single_file(self, input_path, output_path, metadata, trim_intro, trim_outro):
+        filename = os.path.basename(input_path)
+        logging.info(f"Processing details for {filename}: Trim Intro={trim_intro}, Trim Outro={trim_outro}")
+
         if not trim_intro and not trim_outro:
-            # Efficiently copy or convert file, then apply metadata
+            logging.info(f"No trimming required for {filename}. Converting and applying metadata.")
             if os.path.splitext(input_path)[1].lower() == '.mp3':
+                logging.info(f"Copying {filename} directly as it is an MP3.")
                 shutil.copy(input_path, output_path)
             else:
+                logging.info(f"Converting {filename} to MP3.")
                 subprocess.run(
                     ["ffmpeg", "-i", input_path, "-codec:a", "libmp3lame", "-q:a", "2", output_path],
-                    check=True, capture_output=True
+                    check=True, capture_output=True, text=True
                 )
             self.apply_metadata_to_file(output_path, metadata, input_path)
             return
 
         temp_dir = tempfile.mkdtemp()
+        logging.debug(f"Created temporary directory for processing: {temp_dir}")
         try:
             duration = self.get_audio_duration(input_path)
             if duration == 0:
@@ -287,6 +305,7 @@ class AudioMetadataEditor(tk.Tk):
 
             chunk_size_s = 10 * 60
             num_chunks = math.ceil(duration / chunk_size_s)
+            logging.info(f"Splitting {filename} into {num_chunks} chunk(s) for trimming.")
 
             temp_chunk_files = []
             for i in range(num_chunks):
@@ -294,22 +313,25 @@ class AudioMetadataEditor(tk.Tk):
                 t_param = ["-t", str(chunk_size_s)] if i < num_chunks - 1 else []
 
                 chunk_path = os.path.join(temp_dir, f"chunk{i}.mp3")
+                logging.debug(f"Processing chunk {i} for {filename}.")
 
                 ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_path, "-ss", str(start_time)]
                 ffmpeg_cmd.extend(t_param)
 
                 if i == 0 and trim_intro:
+                    logging.info(f"Trimming intro silence from chunk {i} of {filename}.")
                     ffmpeg_cmd.extend(["-af", "silenceremove=start_periods=1:start_threshold=-40dB"])
-                # The 'areverse' filter chain is the correct way to trim from the end.
-                # It reverses the chunk, trims silence from the (now) beginning, and reverses it back.
                 elif i == num_chunks - 1 and trim_outro:
+                    logging.info(f"Trimming outro silence from chunk {i} of {filename}.")
                     ffmpeg_cmd.extend(["-af", "areverse,silenceremove=start_periods=1:start_threshold=-40dB,areverse"])
 
                 ffmpeg_cmd.append(chunk_path)
-                subprocess.run(ffmpeg_cmd, check=True, capture_output=True)
+                logging.debug(f"Running ffmpeg command: {' '.join(ffmpeg_cmd)}")
+                subprocess.run(ffmpeg_cmd, check=True, capture_output=True, text=True)
                 temp_chunk_files.append(chunk_path)
 
             list_path = os.path.join(temp_dir, "concat_list.txt")
+            logging.info(f"Concatenating {len(temp_chunk_files)} chunk(s) for {filename}.")
             with open(list_path, "w", encoding="utf-8") as f:
                 for chunk_path in temp_chunk_files:
                     safe_chunk_path = chunk_path.replace("\\", "/")
@@ -319,41 +341,91 @@ class AudioMetadataEditor(tk.Tk):
             safe_concatenated_path = concatenated_path.replace("\\", "/")
             safe_list_path = list_path.replace("\\", "/")
 
+            concat_cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", safe_list_path, "-c", "copy", safe_concatenated_path]
+            logging.debug(f"Running ffmpeg command: {' '.join(concat_cmd)}")
             subprocess.run(
-                ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", safe_list_path, "-c", "copy", safe_concatenated_path],
-                check=True, capture_output=True
+                concat_cmd,
+                check=True, capture_output=True, text=True
             )
 
+            logging.info(f"Copying final processed file to output folder: {output_path}")
             shutil.copy(concatenated_path, output_path)
             self.apply_metadata_to_file(output_path, metadata, input_path)
 
         finally:
+            logging.info(f"Cleaning up temporary directory: {temp_dir}")
             shutil.rmtree(temp_dir)
 
     def apply_metadata_to_file(self, file_path, metadata, original_path):
+        filename = os.path.basename(file_path)
+        logging.info(f"Applying metadata to {filename}.")
         audio = mutagen.File(file_path, easy=True)
         if audio.tags is None:
+            logging.info(f"No existing tags found for {filename}, creating new ones.")
             audio.add_tags()
 
         # Copy all tags from original file first to preserve them
         try:
+            logging.debug(f"Copying existing tags from {os.path.basename(original_path)}.")
             original_audio = mutagen.File(original_path, easy=True)
             if original_audio and original_audio.tags:
                 audio.tags.clear()
                 for key, value in original_audio.tags.items():
                     audio.tags[key] = value
         except Exception as e:
-            print(f"Could not copy tags from {original_path}: {e}")
+            logging.warning(f"Could not copy tags from {original_path}: {e}")
 
         # Apply changes from GUI
+        logging.debug(f"Applying new metadata to {filename}: {metadata}")
         audio['title'] = metadata.get('title', '')
         audio['artist'] = metadata.get('artist', '')
         audio['albumartist'] = metadata.get('album_artist', '')
         audio['album'] = metadata.get('album', '')
         audio['tracknumber'] = metadata.get('track_number', '')
         audio.save()
+        logging.info(f"Metadata saved for {filename}.")
+
+
+def check_dependencies():
+    """Checks for required dependencies and exits if they are not found."""
+    missing_deps = []
+    try:
+        import tkinter
+        from tkinter import messagebox
+        # If tkinter is present, we can use messagebox.
+        # We need a root window to show the message, but we don't want the window to actually appear.
+        show_error = lambda title, msg: messagebox.showerror(title, msg)
+        root = tkinter.Tk()
+        root.withdraw()
+    except ImportError:
+        missing_deps.append("tkinter")
+        # If tkinter is not present, we can only print to stderr.
+        show_error = lambda title, msg: print(f"ERROR: {title}\n{msg}", file=sys.stderr)
+
+    try:
+        import mutagen
+    except ImportError:
+        missing_deps.append("mutagen")
+
+    try:
+        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True, text=True)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        missing_deps.append("ffmpeg (and ffprobe)")
+
+    if missing_deps:
+        error_message = ("The following dependencies are missing or not in PATH:\n\n" +
+                         "\n".join(f"- {dep}" for dep in missing_deps) +
+                         "\n\nPlease install them and try again.")
+        show_error("Missing Dependencies", error_message)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+    check_dependencies()
+
+    logging.info("Application starting.")
     app = AudioMetadataEditor()
     app.mainloop()
+    logging.info("Application closed.")
