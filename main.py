@@ -331,60 +331,111 @@ class AudioMetadataEditor(tk.Tk):
             if duration == 0:
                 raise ValueError("Could not get audio duration.")
 
-            chunk_size_s = 10 * 60
-            num_chunks = math.ceil(duration / chunk_size_s)
-            logging.info(f"Splitting {filename} into {num_chunks} chunk(s) for trimming.")
-            q.put(('sub_task_start', f"Splitting into {num_chunks} chunks...", num_chunks))
+            chunk_size_s = 600  # 10 minutes
 
-            temp_chunk_files = []
-            for i in range(num_chunks):
-                start_time = i * chunk_size_s
-                t_param = ["-t", str(chunk_size_s)] if i < num_chunks - 1 else []
+            # Optimized logic for long files that require trimming
+            if duration > chunk_size_s * 2:
+                logging.info("Using optimized 3-part splitting logic for long file.")
+                temp_files_to_concat = []
+                final_processed_path = None
 
-                chunk_path = os.path.join(temp_dir, f"chunk{i}.mp3")
-                logging.debug(f"Processing chunk {i} for {filename}.")
-                q.put(('sub_task_progress', i + 1))
+                # Part 1: Intro
+                if trim_intro:
+                    q.put(('sub_task_start', 'Trimming intro...', 1))
+                    intro_chunk_path = os.path.join(temp_dir, "01_intro.mp3")
+                    cmd = ["ffmpeg", "-y", "-i", input_path, "-t", str(chunk_size_s), "-af", "silenceremove=start_periods=1:start_threshold=-40dB", intro_chunk_path]
+                    logging.debug(f"Running ffmpeg command: {' '.join(cmd)}")
+                    subprocess.run(cmd, check=True, capture_output=True, text=True)
+                    temp_files_to_concat.append(intro_chunk_path)
+                    q.put(('sub_task_progress', 1))
 
-                ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_path, "-ss", str(start_time)]
-                ffmpeg_cmd.extend(t_param)
+                # Part 2: Middle
+                middle_start_ss = chunk_size_s if trim_intro else 0
+                middle_end_ss = duration - chunk_size_s if trim_outro else duration
+                middle_duration = middle_end_ss - middle_start_ss
 
-                if i == 0 and trim_intro:
-                    logging.info(f"Trimming intro silence from chunk {i} of {filename}.")
-                    ffmpeg_cmd.extend(["-af", "silenceremove=start_periods=1:start_threshold=-40dB"])
-                elif i == num_chunks - 1 and trim_outro:
-                    logging.info(f"Trimming outro silence from chunk {i} of {filename}.")
-                    ffmpeg_cmd.extend(["-af", "areverse,silenceremove=start_periods=1:start_threshold=-40dB,areverse"])
+                if middle_duration > 0:
+                    q.put(('sub_task_start', 'Extracting middle section...', 1))
+                    middle_chunk_path = os.path.join(temp_dir, "02_middle.mp3")
+                    cmd = ["ffmpeg", "-y", "-ss", str(middle_start_ss), "-i", input_path, "-t", str(middle_duration), "-c", "copy", middle_chunk_path]
+                    logging.debug(f"Running ffmpeg command: {' '.join(cmd)}")
+                    subprocess.run(cmd, check=True, capture_output=True, text=True)
+                    temp_files_to_concat.append(middle_chunk_path)
+                    q.put(('sub_task_progress', 1))
 
-                ffmpeg_cmd.append(chunk_path)
-                logging.debug(f"Running ffmpeg command: {' '.join(ffmpeg_cmd)}")
-                subprocess.run(ffmpeg_cmd, check=True, capture_output=True, text=True)
-                temp_chunk_files.append(chunk_path)
+                # Part 3: Outro
+                if trim_outro:
+                    q.put(('sub_task_start', 'Trimming outro...', 1))
+                    outro_chunk_path = os.path.join(temp_dir, "03_outro.mp3")
+                    cmd = ["ffmpeg", "-y", "-ss", str(duration - chunk_size_s), "-i", input_path, "-af", "areverse,silenceremove=start_periods=1:start_threshold=-40dB,areverse", outro_chunk_path]
+                    logging.debug(f"Running ffmpeg command: {' '.join(cmd)}")
+                    subprocess.run(cmd, check=True, capture_output=True, text=True)
+                    temp_files_to_concat.append(outro_chunk_path)
+                    q.put(('sub_task_progress', 1))
 
-            q.put(('sub_task_end',))
+                q.put(('sub_task_end',))
 
-            list_path = os.path.join(temp_dir, "concat_list.txt")
-            logging.info(f"Concatenating {len(temp_chunk_files)} chunk(s) for {filename}.")
-            q.put(('sub_task_start', f"Concatenating {len(temp_chunk_files)} chunks...", 1))
-            with open(list_path, "w", encoding="utf-8") as f:
-                for chunk_path in temp_chunk_files:
-                    safe_chunk_path = chunk_path.replace("\\", "/")
-                    f.write(f"file '{safe_chunk_path}'\n")
+                # Part 4: Concatenate
+                if not temp_files_to_concat:
+                    raise ValueError("No temporary files were created for concatenation.")
 
-            concatenated_path = os.path.join(temp_dir, "concatenated.mp3")
-            safe_concatenated_path = concatenated_path.replace("\\", "/")
-            safe_list_path = list_path.replace("\\", "/")
+                if len(temp_files_to_concat) == 1:
+                    logging.info("Only one part was processed, no concatenation needed.")
+                    final_processed_path = temp_files_to_concat[0]
+                else:
+                    logging.info(f"Concatenating {len(temp_files_to_concat)} parts.")
+                    q.put(('sub_task_start', f'Combining {len(temp_files_to_concat)} parts...', 1))
+                    list_path = os.path.join(temp_dir, "concat_list.txt")
+                    with open(list_path, "w", encoding="utf-8") as f:
+                        for chunk_path in temp_files_to_concat:
+                            safe_path = chunk_path.replace("\\", "/")
+                            f.write(f"file '{safe_path}'\n")
 
-            concat_cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", safe_list_path, "-c", "copy", safe_concatenated_path]
-            logging.debug(f"Running ffmpeg command: {' '.join(concat_cmd)}")
-            subprocess.run(
-                concat_cmd,
-                check=True, capture_output=True, text=True
-            )
-            q.put(('sub_task_progress', 1))
-            q.put(('sub_task_end',))
+                    final_processed_path = os.path.join(temp_dir, "concatenated.mp3")
+                    concat_cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_path, "-c", "copy", final_processed_path]
+                    logging.debug(f"Running ffmpeg command: {' '.join(concat_cmd)}")
+                    subprocess.run(concat_cmd, check=True, capture_output=True, text=True)
+                    q.put(('sub_task_progress', 1))
 
-            logging.info(f"Copying final processed file to output folder: {output_path}")
-            shutil.copy(concatenated_path, output_path)
+                shutil.copy(final_processed_path, output_path)
+
+            # Fallback to old logic for shorter files
+            else:
+                logging.info("File is shorter than 20 mins, using standard chunking logic.")
+                num_chunks = math.ceil(duration / chunk_size_s)
+                q.put(('sub_task_start', f"Splitting into {num_chunks} chunks...", num_chunks))
+
+                temp_chunk_files = []
+                for i in range(num_chunks):
+                    start_time = i * chunk_size_s
+                    t_param = ["-t", str(chunk_size_s)] if i < num_chunks - 1 else []
+                    chunk_path = os.path.join(temp_dir, f"chunk{i}.mp3")
+                    q.put(('sub_task_progress', i + 1))
+
+                    ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_path, "-ss", str(start_time)]
+                    ffmpeg_cmd.extend(t_param)
+                    if i == 0 and trim_intro:
+                        ffmpeg_cmd.extend(["-af", "silenceremove=start_periods=1:start_threshold=-40dB"])
+                    elif i == num_chunks - 1 and trim_outro:
+                        ffmpeg_cmd.extend(["-af", "areverse,silenceremove=start_periods=1:start_threshold=-40dB,areverse"])
+                    ffmpeg_cmd.append(chunk_path)
+
+                    subprocess.run(ffmpeg_cmd, check=True, capture_output=True, text=True)
+                    temp_chunk_files.append(chunk_path)
+
+                q.put(('sub_task_start', f"Combining {len(temp_chunk_files)} chunks...", 1))
+                list_path = os.path.join(temp_dir, "concat_list.txt")
+                with open(list_path, "w", encoding="utf-8") as f:
+                    for chunk_path in temp_chunk_files:
+                        f.write(f"file '{chunk_path.replace('\'', ''''''''')}'\n")
+
+                concatenated_path = os.path.join(temp_dir, "concatenated.mp3")
+                concat_cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_path, "-c", "copy", concatenated_path]
+                subprocess.run(concat_cmd, check=True, capture_output=True, text=True)
+                q.put(('sub_task_progress', 1))
+
+                shutil.copy(concatenated_path, output_path)
+
             self.apply_metadata_to_file(output_path, metadata, input_path)
 
         finally:
