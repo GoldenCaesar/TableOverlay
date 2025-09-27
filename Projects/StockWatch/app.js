@@ -261,40 +261,42 @@ const fetchMovers = async () => {
 };
 
 
-const loginContainer = document.getElementById('login-container');
-const appContent = document.getElementById('app-content');
-const loginForm = document.getElementById('login-form');
-const logoutButton = document.getElementById('logout-button');
+document.addEventListener('DOMContentLoaded', () => {
+    const loginContainer = document.getElementById('login-container');
+    const appContent = document.getElementById('app-content');
+    const loginForm = document.getElementById('login-form');
+    const logoutButton = document.getElementById('logout-button');
 
-// --- Firebase Auth ---
-window.onAuthStateChanged(window.auth, user => {
-    if (user) {
-        // User is signed in
-        loginContainer.classList.add('hidden');
-        appContent.classList.remove('hidden');
-        initializeAccountData();
-        fetchMovers();
-    } else {
-        // User is signed out
-        loginContainer.classList.remove('hidden');
-        appContent.classList.add('hidden');
-    }
-});
+    // --- Firebase Auth ---
+    window.onAuthStateChanged(window.auth, user => {
+        if (user) {
+            // User is signed in
+            loginContainer.classList.add('hidden');
+            appContent.classList.remove('hidden');
+            initializeAccountData();
+            fetchMovers();
+        } else {
+            // User is signed out
+            loginContainer.classList.remove('hidden');
+            appContent.classList.add('hidden');
+        }
+    });
 
-loginForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const email = loginForm.email.value;
-    const password = loginForm.password.value;
+    loginForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const email = loginForm.email.value;
+        const password = loginForm.password.value;
 
-    window.signInWithEmailAndPassword(window.auth, email, password)
-        .catch((error) => {
-            console.error('Login failed:', error);
-            alert('Login failed. Please check your email and password.');
+        window.signInWithEmailAndPassword(window.auth, email, password)
+            .catch((error) => {
+                console.error('Login failed:', error);
+                alert('Login failed. Please check your email and password.');
+            });
+    });
+
+    logoutButton.addEventListener('click', () => {
+        window.signOut(window.auth).catch((error) => {
+            console.error('Sign out failed:', error);
         });
-});
-
-logoutButton.addEventListener('click', () => {
-    window.signOut(window.auth).catch((error) => {
-        console.error('Sign out failed:', error);
     });
 });
