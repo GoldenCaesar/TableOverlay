@@ -2,9 +2,73 @@
 // and not be exposed in frontend code. This is a placeholder for demonstration.
 const POLYGON_API_KEY = 'cpcNngVpT_OtlshoigLd1l1glvTzVw0f';
 const ALPHA_VANTAGE_API_KEY = 'YRAPRD4NX3XJWHG1';
+const LOGO_DEV_API_KEY = 'pk_VbuZVWKfReGnvXBHVuTuCg';
+
+// --- API Rate Limiter ---
+const createRateLimiter = (key, limit, interval) => {
+    const getStoredData = () => {
+        const data = localStorage.getItem(key);
+        return data ? JSON.parse(data) : { calls: 0, startTime: Date.now() };
+    };
+
+    const setStoredData = (data) => {
+        localStorage.setItem(key, JSON.stringify(data));
+    };
+
+    return {
+        call: async (apiCall) => {
+            let { calls, startTime } = getStoredData();
+            const now = Date.now();
+
+            if (now - startTime > interval) {
+                startTime = now;
+                calls = 0;
+            }
+
+            if (calls < limit) {
+                calls++;
+                setStoredData({ calls, startTime });
+                return await apiCall();
+            } else {
+                console.warn(`Rate limit for ${key} exceeded. Waiting for the next interval.`);
+                const waitTime = startTime + interval - now;
+                if (waitTime > 0) {
+                    await new Promise(resolve => setTimeout(resolve, waitTime));
+                }
+
+                // After waiting, reset and make the call
+                const newStartTime = Date.now();
+                setStoredData({ calls: 1, startTime: newStartTime });
+                return await apiCall();
+            }
+        }
+    };
+};
+
+const polygonRateLimiter = createRateLimiter('polygon', 4, 60 * 1000); // 4 calls per minute
+const alphaVantageRateLimiter = createRateLimiter('alphaVantage', 20, 60 * 1000); // 20 calls per minute
+const logoDevRateLimiter = createRateLimiter('logoDev', 4000, 24 * 60 * 60 * 1000); // 4000 calls per day
+
 
 const searchInput = document.getElementById('search-input');
 const searchResults = document.getElementById('search-results');
+
+const setRateLimitedImage = async (element, ticker) => {
+    try {
+        const imageUrl = `https://img.logo.dev/${ticker}?token=${LOGO_DEV_API_KEY}&size=50&format=png&retina=true`;
+        const response = await logoDevRateLimiter.call(() => fetch(imageUrl));
+        if (!response.ok) {
+            throw new Error(`Failed to fetch logo for ${ticker}`);
+        }
+        const blob = await response.blob();
+        const objectURL = URL.createObjectURL(blob);
+        element.style.backgroundImage = `url(${objectURL})`;
+    } catch (error) {
+        console.error(error);
+        // Fallback to the placeholder if the logo fails to load
+        element.style.backgroundImage = `url("https://placehold.co/600x400/112111/f6f8f6?text=${ticker}")`;
+    }
+};
 
 const renderResults = (results) => {
     if (!results || results.length === 0) {
@@ -12,9 +76,9 @@ const renderResults = (results) => {
         return;
     }
 
-    const resultsHtml = results.map(instrument => `
+    const resultsHtml = results.map((instrument, index) => `
         <div class="flex items-center gap-4 p-2 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 transition-colors">
-            <div class="bg-center bg-no-repeat aspect-square bg-cover rounded-lg size-12" style='background-image: url("https://placehold.co/600x400/112111/f6f8f6?text=${instrument.ticker}");'></div>
+            <div id="search-logo-${index}" class="bg-center bg-no-repeat aspect-square bg-cover rounded-lg size-12"></div>
             <div class="flex-1">
                 <p class="text-black dark:text-white font-semibold">${instrument.ticker}</p>
                 <p class="text-black/60 dark:text-white/60 text-sm truncate">${instrument.name}</p>
@@ -23,6 +87,13 @@ const renderResults = (results) => {
     `).join('');
 
     searchResults.innerHTML = resultsHtml;
+
+    results.forEach((instrument, index) => {
+        const logoEl = document.getElementById(`search-logo-${index}`);
+        if (logoEl) {
+            setRateLimitedImage(logoEl, instrument.ticker);
+        }
+    });
 };
 
 let debounceTimer;
@@ -33,7 +104,9 @@ const searchStocks = async (query) => {
     }
 
     try {
-        const response = await fetch(`https://api.polygon.io/v3/reference/tickers?search=${query}&active=true&limit=10&apiKey=${POLYGON_API_KEY}`);
+        const response = await polygonRateLimiter.call(() =>
+            fetch(`https://api.polygon.io/v3/reference/tickers?search=${query}&active=true&limit=10&apiKey=${POLYGON_API_KEY}`)
+        );
         if (!response.ok) {
             throw new Error(`API request failed with status ${response.status}`);
         }
@@ -125,12 +198,13 @@ const topLosersList = document.getElementById('top-losers-list');
 const renderMovers = (movers) => {
     if (!movers) return;
 
-    const createMoverHtml = (stock, isGainer) => {
+    const createMoverHtml = (stock, isGainer, index) => {
+        const type = isGainer ? 'gainer' : 'loser';
         const changeClass = isGainer ? 'text-green-500' : 'text-red-500';
         const sign = isGainer ? '+' : '';
         return `
             <div class="flex items-center gap-4 p-2 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 transition-colors">
-                <div class="bg-center bg-no-repeat aspect-square bg-cover rounded-lg size-12" style='background-image: url("https://placehold.co/600x400/112111/f6f8f6?text=${stock.ticker}");'></div>
+                <div id="mover-logo-${type}-${index}" class="bg-center bg-no-repeat aspect-square bg-cover rounded-lg size-12"></div>
                 <div class="flex-1">
                     <p class="text-black dark:text-white font-semibold">${stock.ticker}</p>
                     <p class="${changeClass} text-sm font-semibold">${sign}${parseFloat(stock.change_amount).toFixed(2)} (${sign}${parseFloat(stock.change_percentage).toFixed(2)}%)</p>
@@ -140,13 +214,23 @@ const renderMovers = (movers) => {
     };
 
     if (movers.top_gainers && movers.top_gainers.length > 0) {
-        topGainersList.innerHTML = movers.top_gainers.slice(0, 5).map(stock => createMoverHtml(stock, true)).join('');
+        const gainers = movers.top_gainers.slice(0, 5);
+        topGainersList.innerHTML = gainers.map((stock, index) => createMoverHtml(stock, true, index)).join('');
+        gainers.forEach((stock, index) => {
+            const logoEl = document.getElementById(`mover-logo-gainer-${index}`);
+            if (logoEl) setRateLimitedImage(logoEl, stock.ticker);
+        });
     } else {
         topGainersList.innerHTML = '<p class="text-black/60 dark:text-white/60">No top gainers found.</p>';
     }
 
     if (movers.top_losers && movers.top_losers.length > 0) {
-        topLosersList.innerHTML = movers.top_losers.slice(0, 5).map(stock => createMoverHtml(stock, false)).join('');
+        const losers = movers.top_losers.slice(0, 5);
+        topLosersList.innerHTML = losers.map((stock, index) => createMoverHtml(stock, false, index)).join('');
+        losers.forEach((stock, index) => {
+            const logoEl = document.getElementById(`mover-logo-loser-${index}`);
+            if (logoEl) setRateLimitedImage(logoEl, stock.ticker);
+        });
     } else {
         topLosersList.innerHTML = '<p class="text-black/60 dark:text-white/60">No top losers found.</p>';
     }
@@ -155,7 +239,7 @@ const renderMovers = (movers) => {
 const fetchMovers = async () => {
     try {
         const url = `https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey=${ALPHA_VANTAGE_API_KEY}`;
-        const response = await fetch(url, { headers: { 'User-Agent': 'request' } });
+        const response = await alphaVantageRateLimiter.call(() => fetch(url, { headers: { 'User-Agent': 'request' } }));
         if (!response.ok) {
             throw new Error(`API request failed with status ${response.status}`);
         }
