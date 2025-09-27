@@ -1,6 +1,7 @@
 // IMPORTANT: In a real application, this key should be kept on a secure backend server
 // and not be exposed in frontend code. This is a placeholder for demonstration.
 const API_KEY = 'YOUR_POLYGON_API_KEY';
+const ALPHA_VANTAGE_API_KEY = 'YRAPRD4NX3XJWHG1';
 
 const searchInput = document.getElementById('search-input');
 const searchResults = document.getElementById('search-results');
@@ -117,6 +118,66 @@ const updateMonthLabels = () => {
     monthLabelsEl.innerHTML = labels.map(label => `<p class="text-black/60 dark:text-white/60 text-xs font-semibold">${label}</p>`).join('');
 };
 
+// --- Today's Movers ---
+const topGainersList = document.getElementById('top-gainers-list');
+const topLosersList = document.getElementById('top-losers-list');
+
+const renderMovers = (movers) => {
+    if (!movers) return;
+
+    const createMoverHtml = (stock, isGainer) => {
+        const changeClass = isGainer ? 'text-green-500' : 'text-red-500';
+        const sign = isGainer ? '+' : '';
+        return `
+            <div class="flex items-center gap-4 p-2 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 transition-colors">
+                <div class="bg-center bg-no-repeat aspect-square bg-cover rounded-lg size-12" style='background-image: url("https://placehold.co/600x400/112111/f6f8f6?text=${stock.ticker}");'></div>
+                <div class="flex-1">
+                    <p class="text-black dark:text-white font-semibold">${stock.ticker}</p>
+                    <p class="${changeClass} text-sm font-semibold">${sign}${parseFloat(stock.change_amount).toFixed(2)} (${sign}${parseFloat(stock.change_percentage).toFixed(2)}%)</p>
+                </div>
+            </div>
+        `;
+    };
+
+    if (movers.top_gainers && movers.top_gainers.length > 0) {
+        topGainersList.innerHTML = movers.top_gainers.slice(0, 5).map(stock => createMoverHtml(stock, true)).join('');
+    } else {
+        topGainersList.innerHTML = '<p class="text-black/60 dark:text-white/60">No top gainers found.</p>';
+    }
+
+    if (movers.top_losers && movers.top_losers.length > 0) {
+        topLosersList.innerHTML = movers.top_losers.slice(0, 5).map(stock => createMoverHtml(stock, false)).join('');
+    } else {
+        topLosersList.innerHTML = '<p class="text-black/60 dark:text-white/60">No top losers found.</p>';
+    }
+};
+
+const fetchMovers = async () => {
+    try {
+        const url = `https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey=${ALPHA_VANTAGE_API_KEY}`;
+        const response = await fetch(url, { headers: { 'User-Agent': 'request' } });
+        if (!response.ok) {
+            throw new Error(`API request failed with status ${response.status}`);
+        }
+        const data = await response.json();
+
+        if (data.top_gainers || data.top_losers) {
+            renderMovers(data);
+        } else {
+            console.error("Could not parse movers data:", data);
+            topGainersList.innerHTML = '<p class="text-red-500">Could not retrieve movers data.</p>';
+            topLosersList.innerHTML = '<p class="text-red-500">Could not retrieve movers data.</p>';
+        }
+
+    } catch (error) {
+        console.error('Error fetching movers:', error);
+        topGainersList.innerHTML = `<p class="text-red-500">Error fetching data. Check console.</p>`;
+        topLosersList.innerHTML = `<p class="text-red-500">Error fetching data. Check console.</p>`;
+    }
+};
+
+
 document.addEventListener('DOMContentLoaded', () => {
     initializeAccountData();
+    fetchMovers();
 });
