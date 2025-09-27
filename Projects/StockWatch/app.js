@@ -1,6 +1,6 @@
 // IMPORTANT: In a real application, this key should be kept on a secure backend server
 // and not be exposed in frontend code. This is a placeholder for demonstration.
-const API_KEY = 'YOUR_POLYGON_API_KEY';
+const POLYGON_API_KEY = 'cpcNngVpT_OtlshoigLd1l1glvTzVw0f';
 const ALPHA_VANTAGE_API_KEY = 'YRAPRD4NX3XJWHG1';
 
 const searchInput = document.getElementById('search-input');
@@ -33,7 +33,7 @@ const searchStocks = async (query) => {
     }
 
     try {
-        const response = await fetch(`https://api.polygon.io/v3/reference/tickers?search=${query}&active=true&limit=10&apiKey=${API_KEY}`);
+        const response = await fetch(`https://api.polygon.io/v3/reference/tickers?search=${query}&active=true&limit=10&apiKey=${POLYGON_API_KEY}`);
         if (!response.ok) {
             throw new Error(`API request failed with status ${response.status}`);
         }
