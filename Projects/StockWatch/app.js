@@ -279,6 +279,21 @@ document.addEventListener('DOMContentLoaded', () => {
             });
     });
 
+    const checkAndDisplayApiKeyError = () => {
+        const postLoginErrorContainer = document.getElementById('post-login-error-container');
+        if (!postLoginErrorContainer) return;
+
+        const hasPlaceholders = userPolygonApiKey.startsWith('YOUR_') ||
+                                userAlphaVantageApiKey.startsWith('YOUR_') ||
+                                userLogoDevApiKey.startsWith('YOUR_');
+
+        if (hasPlaceholders) {
+            postLoginErrorContainer.classList.remove('hidden');
+        } else {
+            postLoginErrorContainer.classList.add('hidden');
+        }
+    };
+
     const saveApiKeys = async (user) => {
         if (!user) return;
         const apiKeys = {
@@ -294,6 +309,7 @@ document.addEventListener('DOMContentLoaded', () => {
             userAlphaVantageApiKey = apiKeys.alphaVantage || userAlphaVantageApiKey;
             userLogoDevApiKey = apiKeys.logoDev || userLogoDevApiKey;
             apiKeyModal.classList.add('hidden');
+            checkAndDisplayApiKeyError(); // Re-run check after saving
         } catch (error) {
             console.error("Error saving API keys: ", error);
             alert("Could not save API keys. Please try again.");
@@ -340,6 +356,7 @@ document.addEventListener('DOMContentLoaded', () => {
             loginContainer.classList.add('hidden');
             appContent.classList.remove('hidden');
             await loadApiKeys(user); // Load keys on login
+            checkAndDisplayApiKeyError(); // Run check after loading keys
             initializeAccountData();
             fetchMovers();
         } else {
