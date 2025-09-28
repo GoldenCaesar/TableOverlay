@@ -157,9 +157,14 @@
 <!-- Sidebar -->
 <div id="sidebar" class="hidden fixed inset-y-0 left-0 w-64 bg-background-light dark:bg-background-dark border-r border-black/10 dark:border-white/10 z-20 p-6">
     <h2 class="text-2xl font-bold text-primary mb-8">Menu</h2>
-    <button id="profile-button" class="w-full text-left py-2 px-4 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 transition-colors">
-        Profile & API Keys
-    </button>
+    <div class="space-y-2">
+        <button id="profile-button" class="w-full text-left py-2 px-4 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 transition-colors text-black dark:text-white">
+            Api Keys
+        </button>
+        <button id="paper-trading-button" class="w-full text-left py-2 px-4 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 transition-colors text-black dark:text-white">
+            Paper Trading
+        </button>
+    </div>
     <!-- Add other sidebar links here if needed -->
 </div>
 
@@ -187,6 +192,29 @@
         <div class="flex justify-end gap-4 mt-8">
             <button id="close-modal-button" class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg">Close</button>
             <button id="save-api-keys-button" class="bg-primary hover:bg-primary/80 text-white font-bold py-2 px-4 rounded-lg">Save</button>
+        </div>
+    </div>
+</div>
+
+<!-- Paper Trading Modal -->
+<div id="paper-trading-modal" class="hidden fixed inset-0 bg-black/50 z-30 flex items-center justify-center">
+    <div class="bg-background-light dark:bg-background-dark rounded-lg p-8 w-full max-w-md m-4">
+        <h2 class="text-2xl font-bold text-primary mb-4">Paper Trading</h2>
+        <p class="text-black/60 dark:text-white/60 mb-6">Set your paper trading account balance. This will be reflected on your homepage.</p>
+
+        <div class="space-y-4">
+            <div>
+                <label for="paper-trading-balance-input" class="block text-sm font-medium text-black/80 dark:text-white/80">Account Balance</label>
+                <input type="number" id="paper-trading-balance-input" placeholder="e.g., 100000" class="mt-1 w-full bg-background-light dark:bg-background-dark border border-black/10 dark:border-white/10 rounded-lg py-2 px-4 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-primary">
+            </div>
+        </div>
+
+        <div class="flex justify-between items-center mt-8">
+             <button id="reset-paper-trading-button" class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg">Reset History</button>
+            <div class="flex gap-4">
+                <button id="close-paper-trading-modal-button" class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg">Close</button>
+                <button id="save-paper-trading-button" class="bg-primary hover:bg-primary/80 text-white font-bold py-2 px-4 rounded-lg">Save</button>
+            </div>
         </div>
     </div>
 </div>
