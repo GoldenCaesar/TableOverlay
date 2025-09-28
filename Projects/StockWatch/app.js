@@ -110,8 +110,15 @@ const searchStocks = async (query) => {
     }
 };
 
-const initializeAccountData = () => {
-    document.getElementById('account-value').textContent = '$10,000.00';
+const updateAccountBalanceUI = (balance) => {
+    const accountValueEl = document.getElementById('account-value');
+    if (accountValueEl) {
+        accountValueEl.textContent = `$${parseFloat(balance).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+};
+
+const initializeAccountData = (balance = 10000) => {
+    updateAccountBalanceUI(balance);
     document.getElementById('past-year-percentage').textContent = '+0.00%';
     updateGraph();
     updateMonthLabels();
@@ -197,6 +204,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const polygonApiKeyInput = document.getElementById('polygon-api-key-input');
     const alphaVantageApiKeyInput = document.getElementById('alpha-vantage-api-key-input');
     const logoDevApiKeyInput = document.getElementById('logo-dev-api-key-input');
+    const paperTradingButton = document.getElementById('paper-trading-button');
+    const paperTradingModal = document.getElementById('paper-trading-modal');
+    const closePaperTradingModalButton = document.getElementById('close-paper-trading-modal-button');
+    const savePaperTradingButton = document.getElementById('save-paper-trading-button');
+    const resetPaperTradingButton = document.getElementById('reset-paper-trading-button');
+    const paperTradingBalanceInput = document.getElementById('paper-trading-balance-input');
 
     const db = firebase.firestore();
 
@@ -218,6 +231,26 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.target === apiKeyModal) {
             apiKeyModal.classList.add('hidden');
         }
+    });
+
+    paperTradingButton.addEventListener('click', () => {
+        paperTradingModal.classList.remove('hidden');
+        sidebar.classList.add('hidden');
+    });
+
+    closePaperTradingModalButton.addEventListener('click', () => {
+        paperTradingModal.classList.add('hidden');
+    });
+
+    paperTradingModal.addEventListener('click', (e) => {
+        if (e.target === paperTradingModal) {
+            paperTradingModal.classList.add('hidden');
+        }
+    });
+
+    resetPaperTradingButton.addEventListener('click', () => {
+        console.log("Paper trading history reset is not yet implemented.");
+        alert("Paper trading history reset is not yet implemented.");
     });
 
     document.addEventListener('click', () => {
@@ -304,12 +337,11 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             await db.collection('user_settings').doc(user.uid).set({ apiKeys }, { merge: true });
             console.log('API keys saved successfully.');
-            // Update the in-memory keys immediately
             userPolygonApiKey = apiKeys.polygon || userPolygonApiKey;
             userAlphaVantageApiKey = apiKeys.alphaVantage || userAlphaVantageApiKey;
             userLogoDevApiKey = apiKeys.logoDev || userLogoDevApiKey;
             apiKeyModal.classList.add('hidden');
-            checkAndDisplayApiKeyError(); // Re-run check after saving
+            checkAndDisplayApiKeyError();
         } catch (error) {
             console.error("Error saving API keys: ", error);
             alert("Could not save API keys. Please try again.");
@@ -326,12 +358,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     userPolygonApiKey = settings.apiKeys.polygon || userPolygonApiKey;
                     userAlphaVantageApiKey = settings.apiKeys.alphaVantage || userAlphaVantageApiKey;
                     userLogoDevApiKey = settings.apiKeys.logoDev || userLogoDevApiKey;
-
-                    // Pre-fill the modal inputs
                     polygonApiKeyInput.value = userPolygonApiKey;
                     alphaVantageApiKeyInput.value = userAlphaVantageApiKey;
                     logoDevApiKeyInput.value = userLogoDevApiKey;
-
                     console.log('API keys loaded successfully.');
                 }
             } else {
@@ -339,6 +368,50 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } catch (error) {
             console.error("Error loading API keys: ", error);
+        }
+    };
+
+    const savePaperTradingBalance = async (user) => {
+        if (!user) return;
+        const newBalance = parseFloat(paperTradingBalanceInput.value);
+        if (isNaN(newBalance) || newBalance < 0) {
+            alert("Please enter a valid, non-negative number for the balance.");
+            return;
+        }
+        if (newBalance > 10000000) {
+            alert("The account balance cannot exceed $10,000,000.");
+            return;
+        }
+        try {
+            await db.collection('user_settings').doc(user.uid).set({ paperTrading: { balance: newBalance } }, { merge: true });
+            console.log('Paper trading balance saved successfully.');
+            updateAccountBalanceUI(newBalance);
+            paperTradingModal.classList.add('hidden');
+        } catch (error) {
+            console.error("Error saving paper trading balance: ", error);
+            alert("Could not save paper trading balance. Please try again.");
+        }
+    };
+
+    const loadPaperTradingBalance = async (user) => {
+        if (!user) return;
+        try {
+            const doc = await db.collection('user_settings').doc(user.uid).get();
+            let balance = 10000;
+            if (doc.exists) {
+                const settings = doc.data();
+                if (settings.paperTrading && typeof settings.paperTrading.balance !== 'undefined') {
+                    balance = settings.paperTrading.balance;
+                    console.log('Paper trading balance loaded successfully.');
+                } else {
+                    console.log("No custom paper trading balance found. Using default.");
+                }
+            }
+            initializeAccountData(balance);
+            paperTradingBalanceInput.value = balance;
+        } catch (error) {
+            console.error("Error loading paper trading balance: ", error);
+            initializeAccountData();
         }
     };
 
@@ -351,18 +424,26 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    savePaperTradingButton.addEventListener('click', () => {
+        const user = auth.currentUser;
+        if (user) {
+            savePaperTradingBalance(user);
+        } else {
+            console.error("No user is signed in to save paper trading balance.");
+        }
+    });
+
     firebase.auth().onAuthStateChanged(async (user) => {
         if (user) {
             loginContainer.classList.add('hidden');
             appContent.classList.remove('hidden');
-            await loadApiKeys(user); // Load keys on login
-            checkAndDisplayApiKeyError(); // Run check after loading keys
-            initializeAccountData();
+            await loadApiKeys(user);
+            await loadPaperTradingBalance(user);
+            checkAndDisplayApiKeyError();
             fetchMovers();
         } else {
             loginContainer.classList.remove('hidden');
             appContent.classList.add('hidden');
-            // Reset keys on logout
             userPolygonApiKey = 'YOUR_POLYGON_API_KEY';
             userAlphaVantageApiKey = 'YOUR_ALPHA_VANTAGE_API_KEY';
             userLogoDevApiKey = 'YOUR_LOGO_DEV_API_KEY';
