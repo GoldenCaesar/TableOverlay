@@ -1,22 +1,22 @@
-// --- API Keys (Replace with your actual keys) ---
-// IMPORTANT: In a real application, these keys should be managed securely and not hardcoded.
-// For this project, replace the placeholder values with your actual API keys.
-const POLYGON_API_KEY = 'YOUR_POLYGON_API_KEY';
-const ALPHA_VANTAGE_API_KEY = 'YOUR_ALPHA_VANTAGE_API_KEY';
-const LOGO_DEV_API_KEY = 'YOUR_LOGO_DEV_API_KEY';
+// --- User-Specific API Keys ---
+// These variables will hold the API keys for the current session.
+// They are initialized with the placeholder values and will be updated from Firestore upon login.
+let userPolygonApiKey = 'YOUR_POLYGON_API_KEY';
+let userAlphaVantageApiKey = 'YOUR_ALPHA_VANTAGE_API_KEY';
+let userLogoDevApiKey = 'YOUR_LOGO_DEV_API_KEY';
 
 
 // --- Runtime Check for API Keys ---
 // This check ensures the developer has replaced the placeholder API keys.
-if (POLYGON_API_KEY.startsWith('YOUR_') || ALPHA_VANTAGE_API_KEY.startsWith('YOUR_') || LOGO_DEV_API_KEY.startsWith('YOUR_') || firebaseConfig.apiKey.startsWith('YOUR_')) {
+if (firebaseConfig.apiKey.startsWith('YOUR_')) {
     document.body.innerHTML = `
       <div style="background-color: #112111; color: #f6f8f6; font-family: 'Manrope', sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; padding: 2rem; text-align: center;">
         <h1 style="font-size: 2.5rem; color: #14b814; margin-bottom: 1.5rem;">Configuration Error</h1>
-        <p style="font-size: 1.2rem; margin-bottom: 1rem;">One or more API keys in <strong>app.js</strong> or <strong>index.html</strong> are using placeholder values.</p>
-        <p style="font-size: 1rem; max-width: 600px;">Please replace the placeholder values for <strong>POLYGON_API_KEY</strong>, <strong>ALPHA_VANTAGE_API_KEY</strong>, <strong>LOGO_DEV_API_KEY</strong>, and the <strong>firebaseConfig</strong> object with your actual credentials to run the application.</p>
+        <p style="font-size: 1.2rem; margin-bottom: 1rem;">The Firebase configuration in <strong>index.html</strong> is using placeholder values.</p>
+        <p style="font-size: 1rem; max-width: 600px;">Please replace the placeholder values for the <strong>firebaseConfig</strong> object with your actual credentials to run the application.</p>
       </div>
     `;
-    throw new Error("API keys are not configured. Please update the placeholder values.");
+    throw new Error("Firebase is not configured. Please update the placeholder values in index.html.");
 }
 
 
@@ -60,7 +60,7 @@ const searchResults = document.getElementById('search-results');
 
 const setRateLimitedImage = async (element, ticker) => {
     try {
-        const imageUrl = `https://img.logo.dev/${ticker}?token=${LOGO_DEV_API_KEY}&size=50&format=png&retina=true`;
+        const imageUrl = `https://img.logo.dev/${ticker}?token=${userLogoDevApiKey}&size=50&format=png&retina=true`;
         const response = await logoDevRateLimiter.call(() => fetch(imageUrl));
         if (!response.ok) throw new Error(`Failed to fetch logo for ${ticker}`);
         const blob = await response.blob();
@@ -99,7 +99,7 @@ const searchStocks = async (query) => {
     }
     try {
         const response = await polygonRateLimiter.call(() =>
-            fetch(`https://api.polygon.io/v3/reference/tickers?search=${query}&active=true&limit=10&apiKey=${POLYGON_API_KEY}`)
+            fetch(`https://api.polygon.io/v3/reference/tickers?search=${query}&active=true&limit=10&apiKey=${userPolygonApiKey}`)
         );
         if (!response.ok) throw new Error(`API request failed: ${response.status}`);
         const data = await response.json();
@@ -162,7 +162,7 @@ const renderMovers = (movers) => {
 
 const fetchMovers = async () => {
     try {
-        const url = `https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey=${ALPHA_VANTAGE_API_KEY}`;
+        const url = `https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey=${userAlphaVantageApiKey}`;
         const response = await alphaVantageRateLimiter.call(() => fetch(url));
         if (!response.ok) throw new Error(`API request failed: ${response.status}`);
         const data = await response.json();
@@ -188,6 +188,47 @@ document.addEventListener('DOMContentLoaded', () => {
     const signInButton = document.getElementById('sign-in-button');
     const signUpButton = document.getElementById('sign-up-button');
     const errorMessage = document.getElementById('error-message');
+    const hamburgerMenuButton = document.getElementById('hamburger-menu-button');
+    const sidebar = document.getElementById('sidebar');
+    const profileButton = document.getElementById('profile-button');
+    const apiKeyModal = document.getElementById('api-key-modal');
+    const closeModalButton = document.getElementById('close-modal-button');
+    const saveApiKeysButton = document.getElementById('save-api-keys-button');
+    const polygonApiKeyInput = document.getElementById('polygon-api-key-input');
+    const alphaVantageApiKeyInput = document.getElementById('alpha-vantage-api-key-input');
+    const logoDevApiKeyInput = document.getElementById('logo-dev-api-key-input');
+
+    const db = firebase.firestore();
+
+    hamburgerMenuButton.addEventListener('click', (e) => {
+        e.stopPropagation();
+        sidebar.classList.toggle('hidden');
+    });
+
+    profileButton.addEventListener('click', () => {
+        apiKeyModal.classList.remove('hidden');
+        sidebar.classList.add('hidden');
+    });
+
+    closeModalButton.addEventListener('click', () => {
+        apiKeyModal.classList.add('hidden');
+    });
+
+    apiKeyModal.addEventListener('click', (e) => {
+        if (e.target === apiKeyModal) {
+            apiKeyModal.classList.add('hidden');
+        }
+    });
+
+    document.addEventListener('click', () => {
+        if (!sidebar.classList.contains('hidden')) {
+            sidebar.classList.add('hidden');
+        }
+    });
+
+    sidebar.addEventListener('click', (e) => {
+        e.stopPropagation();
+    });
 
     let debounceTimer;
     searchInput.addEventListener('input', (event) => {
@@ -238,15 +279,76 @@ document.addEventListener('DOMContentLoaded', () => {
             });
     });
 
-    firebase.auth().onAuthStateChanged(user => {
+    const saveApiKeys = async (user) => {
+        if (!user) return;
+        const apiKeys = {
+            polygon: polygonApiKeyInput.value,
+            alphaVantage: alphaVantageApiKeyInput.value,
+            logoDev: logoDevApiKeyInput.value,
+        };
+        try {
+            await db.collection('user_settings').doc(user.uid).set({ apiKeys }, { merge: true });
+            console.log('API keys saved successfully.');
+            // Update the in-memory keys immediately
+            userPolygonApiKey = apiKeys.polygon || userPolygonApiKey;
+            userAlphaVantageApiKey = apiKeys.alphaVantage || userAlphaVantageApiKey;
+            userLogoDevApiKey = apiKeys.logoDev || userLogoDevApiKey;
+            apiKeyModal.classList.add('hidden');
+        } catch (error) {
+            console.error("Error saving API keys: ", error);
+            alert("Could not save API keys. Please try again.");
+        }
+    };
+
+    const loadApiKeys = async (user) => {
+        if (!user) return;
+        try {
+            const doc = await db.collection('user_settings').doc(user.uid).get();
+            if (doc.exists) {
+                const settings = doc.data();
+                if (settings.apiKeys) {
+                    userPolygonApiKey = settings.apiKeys.polygon || userPolygonApiKey;
+                    userAlphaVantageApiKey = settings.apiKeys.alphaVantage || userAlphaVantageApiKey;
+                    userLogoDevApiKey = settings.apiKeys.logoDev || userLogoDevApiKey;
+
+                    // Pre-fill the modal inputs
+                    polygonApiKeyInput.value = userPolygonApiKey;
+                    alphaVantageApiKeyInput.value = userAlphaVantageApiKey;
+                    logoDevApiKeyInput.value = userLogoDevApiKey;
+
+                    console.log('API keys loaded successfully.');
+                }
+            } else {
+                console.log("No custom API keys found for user. Using default placeholders.");
+            }
+        } catch (error) {
+            console.error("Error loading API keys: ", error);
+        }
+    };
+
+    saveApiKeysButton.addEventListener('click', () => {
+        const user = auth.currentUser;
+        if (user) {
+            saveApiKeys(user);
+        } else {
+            console.error("No user is signed in to save API keys.");
+        }
+    });
+
+    firebase.auth().onAuthStateChanged(async (user) => {
         if (user) {
             loginContainer.classList.add('hidden');
             appContent.classList.remove('hidden');
+            await loadApiKeys(user); // Load keys on login
             initializeAccountData();
             fetchMovers();
         } else {
             loginContainer.classList.remove('hidden');
             appContent.classList.add('hidden');
+            // Reset keys on logout
+            userPolygonApiKey = 'YOUR_POLYGON_API_KEY';
+            userAlphaVantageApiKey = 'YOUR_ALPHA_VANTAGE_API_KEY';
+            userLogoDevApiKey = 'YOUR_LOGO_DEV_API_KEY';
         }
     });
 

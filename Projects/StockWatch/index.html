@@ -43,6 +43,7 @@
     </style>
     <script src="https://www.gstatic.com/firebasejs/10.0.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.0.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.0.0/firebase-firestore-compat.js"></script>
     <script>
       // IMPORTANT: Replace with your project's Firebase configuration.
       const firebaseConfig = {
@@ -90,7 +91,7 @@
     <div class="relative flex h-auto min-h-screen w-full flex-col justify-between group/design-root overflow-x-hidden">
         <div class="flex-grow">
             <div class="flex items-center p-4 justify-between bg-background-light dark:bg-background-dark sticky top-0 z-10">
-                <button class="text-black dark:text-white p-2">
+                <button id="hamburger-menu-button" class="text-black dark:text-white p-2">
                     <svg fill="currentColor" height="28px" viewBox="0 0 256 256" width="28px" xmlns="http://www.w3.org/2000/svg"><path d="M224,128a8,8,0,0,1-8,8H40a8,8,0,0,1,0-16H216A8,8,0,0,1,224,128ZM40,72H216a8,8,0,0,0,0-16H40a8,8,0,0,0,0,16ZM216,184H40a8,8,0,0,0,0,16H216a8,8,0,0,0,0-16Z"></path></svg>
                 </button>
                 <div class="relative flex-grow ml-4">
@@ -147,5 +148,43 @@
     </div>
 </div>
 <script src="app.js"></script>
+
+<!-- Sidebar -->
+<div id="sidebar" class="hidden fixed inset-y-0 left-0 w-64 bg-background-light dark:bg-background-dark border-r border-black/10 dark:border-white/10 z-20 p-6">
+    <h2 class="text-2xl font-bold text-primary mb-8">Menu</h2>
+    <button id="profile-button" class="w-full text-left py-2 px-4 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 transition-colors">
+        Profile & API Keys
+    </button>
+    <!-- Add other sidebar links here if needed -->
+</div>
+
+<!-- API Key Modal -->
+<div id="api-key-modal" class="hidden fixed inset-0 bg-black/50 z-30 flex items-center justify-center">
+    <div class="bg-background-light dark:bg-background-dark rounded-lg p-8 w-full max-w-md m-4">
+        <h2 class="text-2xl font-bold text-primary mb-4">API Keys</h2>
+        <p class="text-black/60 dark:text-white/60 mb-6">Enter your personal API keys below. They will be stored securely and used for all data requests.</p>
+
+        <div class="space-y-4">
+            <div>
+                <label for="polygon-api-key-input" class="block text-sm font-medium text-black/80 dark:text-white/80">Polygon API Key</label>
+                <input type="password" id="polygon-api-key-input" placeholder="Your Polygon Key" class="mt-1 w-full bg-background-light dark:bg-background-dark border border-black/10 dark:border-white/10 rounded-lg py-2 px-4 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-primary">
+            </div>
+            <div>
+                <label for="alpha-vantage-api-key-input" class="block text-sm font-medium text-black/80 dark:text-white/80">Alpha Vantage API Key</label>
+                <input type="password" id="alpha-vantage-api-key-input" placeholder="Your Alpha Vantage Key" class="mt-1 w-full bg-background-light dark:bg-background-dark border border-black/10 dark:border-white/10 rounded-lg py-2 px-4 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-primary">
+            </div>
+            <div>
+                <label for="logo-dev-api-key-input" class="block text-sm font-medium text-black/80 dark:text-white/80">logo.dev API Key</label>
+                <input type="password" id="logo-dev-api-key-input" placeholder="Your logo.dev Key" class="mt-1 w-full bg-background-light dark:bg-background-dark border border-black/10 dark:border-white/10 rounded-lg py-2 px-4 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-primary">
+            </div>
+        </div>
+
+        <div class="flex justify-end gap-4 mt-8">
+            <button id="close-modal-button" class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg">Close</button>
+            <button id="save-api-keys-button" class="bg-primary hover:bg-primary/80 text-white font-bold py-2 px-4 rounded-lg">Save</button>
+        </div>
+    </div>
+</div>
+
 </body>
 </html>
