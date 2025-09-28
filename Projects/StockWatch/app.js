@@ -183,11 +183,59 @@ document.addEventListener('DOMContentLoaded', () => {
     const loginContainer = document.getElementById('login-container');
     const appContent = document.getElementById('app-content');
     const logoutButton = document.getElementById('logout-button');
+    const emailInput = document.getElementById('email');
+    const passwordInput = document.getElementById('password');
+    const signInButton = document.getElementById('sign-in-button');
+    const signUpButton = document.getElementById('sign-up-button');
+    const errorMessage = document.getElementById('error-message');
 
     let debounceTimer;
     searchInput.addEventListener('input', (event) => {
         clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => searchStocks(event.target.value), 300);
+    });
+
+    const auth = firebase.auth();
+
+    const displayError = (message) => {
+        errorMessage.querySelector('span').textContent = message;
+        errorMessage.classList.remove('hidden');
+    };
+
+    const hideError = () => {
+        errorMessage.classList.add('hidden');
+    };
+
+    signUpButton.addEventListener('click', () => {
+        const email = emailInput.value;
+        const password = passwordInput.value;
+        hideError();
+        auth.createUserWithEmailAndPassword(email, password)
+            .catch((error) => {
+                if (error.code === 'auth/email-already-in-use') {
+                    displayError('This email address is already in use. Please sign in.');
+                } else {
+                    displayError(error.message);
+                }
+                console.error("Error signing up:", error);
+            });
+    });
+
+    signInButton.addEventListener('click', () => {
+        const email = emailInput.value;
+        const password = passwordInput.value;
+        hideError();
+        auth.signInWithEmailAndPassword(email, password)
+            .catch((error) => {
+                if (error.code === 'auth/wrong-password') {
+                    displayError('Incorrect password. Please try again.');
+                } else if (error.code === 'auth/user-not-found') {
+                    displayError('No account found with this email. Please sign up.');
+                } else {
+                    displayError(error.message);
+                }
+                console.error("Error signing in:", error);
+            });
     });
 
     firebase.auth().onAuthStateChanged(user => {
@@ -199,7 +247,6 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             loginContainer.classList.remove('hidden');
             appContent.classList.add('hidden');
-            ui.start('#firebaseui-auth-container', uiConfig);
         }
     });
 

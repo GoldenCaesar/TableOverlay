@@ -43,8 +43,6 @@
     </style>
     <script src="https://www.gstatic.com/firebasejs/10.0.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.0.0/firebase-auth-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/ui/6.1.0/firebase-ui-auth.js"></script>
-    <link type="text/css" rel="stylesheet" href="https://www.gstatic.com/firebasejs/ui/6.1.0/firebase-ui-auth.css" />
     <script>
       // IMPORTANT: Replace with your project's Firebase configuration.
       const firebaseConfig = {
@@ -58,20 +56,6 @@
 
       // Initialize Firebase
       firebase.initializeApp(firebaseConfig);
-
-      // FirebaseUI config.
-      const uiConfig = {
-        signInSuccessUrl: '#',
-        signInOptions: [
-          firebase.auth.GoogleAuthProvider.PROVIDER_ID,
-          firebase.auth.EmailAuthProvider.PROVIDER_ID,
-        ],
-        tosUrl: '#',
-        privacyPolicyUrl: '#'
-      };
-
-      // Make ui object global so it can be accessed by app.js
-      const ui = new firebaseui.auth.AuthUI(firebase.auth());
     </script>
 </head>
 <body class="bg-background-light dark:bg-background-dark font-display">
@@ -82,7 +66,18 @@
         <div class="text-center mb-12">
             <h1 class="text-4xl font-extrabold text-primary">StockWatch</h1>
         </div>
-        <div id="firebaseui-auth-container" class="w-full max-w-sm"></div>
+        <div id="auth-container" class="w-full max-w-sm">
+            <div id="error-message" class="hidden bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4" role="alert">
+                <strong class="font-bold">Error:</strong>
+                <span class="block sm:inline"></span>
+            </div>
+            <input type="email" id="email" placeholder="Email" class="w-full bg-background-light dark:bg-background-dark border border-black/10 dark:border-white/10 rounded-lg py-2 px-4 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-primary mb-4">
+            <input type="password" id="password" placeholder="Password" class="w-full bg-background-light dark:bg-background-dark border border-black/10 dark:border-white/10 rounded-lg py-2 px-4 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-primary mb-4">
+            <div class="flex gap-4">
+                <button id="sign-in-button" class="w-full bg-primary hover:bg-primary/80 text-white font-bold py-2 px-4 rounded-lg">Sign In</button>
+                <button id="sign-up-button" class="w-full bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg">Sign Up</button>
+            </div>
+        </div>
         <div class="relative text-center px-6 py-4 z-10 mt-4">
             <p class="text-xs text-primary/70 dark:text-primary/60">
                 By continuing, you agree to our <a class="font-bold underline" href="#">Terms of Service</a> and <a class="font-bold underline" href="#">Privacy Policy</a>.
