@@ -55,16 +55,38 @@ const logoDevRateLimiter = createRateLimiter('logoDev', 4000, 24 * 60 * 60 * 100
 
 
 // --- Core App Logic ---
+let db;
 const searchInput = document.getElementById('search-input');
 const searchResults = document.getElementById('search-results');
 
 const setRateLimitedImage = async (element, ticker) => {
+    if (db && firebase.auth().currentUser) {
+        try {
+            const doc = await db.collection('stock_history').doc(ticker).get();
+            if (doc.exists && doc.data().logo) {
+                element.style.backgroundImage = `url(${doc.data().logo})`;
+                return;
+            }
+        } catch (error) {
+            console.error("Error fetching cached logo:", error);
+        }
+    }
+
     try {
         const imageUrl = `https://img.logo.dev/${ticker}?token=${userLogoDevApiKey}&size=50&format=png&retina=true`;
         const response = await logoDevRateLimiter.call(() => fetch(imageUrl));
         if (!response.ok) throw new Error(`Failed to fetch logo for ${ticker}`);
         const blob = await response.blob();
-        element.style.backgroundImage = `url(${URL.createObjectURL(blob)})`;
+        const reader = new FileReader();
+        reader.onloadend = () => {
+            const base64String = reader.result;
+            element.style.backgroundImage = `url(${base64String})`;
+            if (db && firebase.auth().currentUser) {
+                db.collection('stock_history').doc(ticker).set({ logo: base64String }, { merge: true })
+                    .catch(err => console.error("Error caching logo:", err));
+            }
+        };
+        reader.readAsDataURL(blob);
     } catch (error) {
         console.error(error);
         element.style.backgroundImage = `url("https://placehold.co/600x400/112111/f6f8f6?text=${ticker}")`;
@@ -87,6 +109,13 @@ const renderResults = (results) => {
     `).join('');
     searchResults.innerHTML = resultsHtml;
     results.forEach((instrument, index) => {
+        if (db && firebase.auth().currentUser) {
+            db.collection('stock_history').doc(instrument.ticker).set({
+                name: instrument.name,
+            }, { merge: true }).catch(error => {
+                console.error("Error caching stock name: ", error);
+            });
+        }
         const logoEl = document.getElementById(`search-logo-${index}`);
         if (logoEl) setRateLimitedImage(logoEl, instrument.ticker);
     });
@@ -175,6 +204,49 @@ const fetchMovers = async () => {
         const data = await response.json();
         if (data.top_gainers || data.top_losers) {
             renderMovers(data);
+
+            if (db && firebase.auth().currentUser) {
+                const today = new Date().toISOString().split('T')[0];
+                const allMovers = [...(data.top_gainers || []), ...(data.top_losers || [])];
+
+                allMovers.forEach(async stock => {
+                    const stockData = {
+                        price: stock.price,
+                        change_amount: stock.change_amount,
+                        change_percentage: stock.change_percentage,
+                        volume: stock.volume,
+                    };
+
+                    try {
+                        const docRef = db.collection('stock_history').doc(stock.ticker);
+                        const doc = await docRef.get();
+
+                        let needsUpdate = true;
+                        if (doc.exists) {
+                            const data = doc.data();
+                            if (data.daily && data.daily[today]) {
+                                const existingData = data.daily[today];
+                                if (
+                                    existingData.price === stockData.price &&
+                                    existingData.change_amount === stockData.change_amount &&
+                                    existingData.change_percentage === stockData.change_percentage &&
+                                    existingData.volume === stockData.volume
+                                ) {
+                                    needsUpdate = false;
+                                }
+                            }
+                        }
+
+                        if (needsUpdate) {
+                            const updatePayload = {};
+                            updatePayload[`daily.${today}`] = stockData;
+                            await docRef.set(updatePayload, { merge: true });
+                        }
+                    } catch (error) {
+                        console.error(`Error caching daily data for ${stock.ticker}:`, error);
+                    }
+                });
+            }
         } else {
             throw new Error("Could not parse movers data");
         }
@@ -211,7 +283,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const resetPaperTradingButton = document.getElementById('reset-paper-trading-button');
     const paperTradingBalanceInput = document.getElementById('paper-trading-balance-input');
 
-    const db = firebase.firestore();
+    db = firebase.firestore();
 
     hamburgerMenuButton.addEventListener('click', (e) => {
         e.stopPropagation();
