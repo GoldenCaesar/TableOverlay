@@ -1,0 +1,59 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Set up Java (JDK 11)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '11'
+
+      - name: Install Cordova
+        run: npm install -g cordova
+
+      - name: Navigate to project and add Android platform
+        run: |
+          cd Projects/SandboxAPK
+          cordova platform add android@12
+
+      - name: Decode Keystore and Replace Placeholders
+        run: |
+          cd Projects/SandboxAPK
+          echo "${{ secrets.KEYSTORE_B64 }}" | base64 --decode > release.keystore
+          sed -i 's|"keystore": "placeholder.keystore"|"keystore": "release.keystore"|' build.json
+          sed -i 's|YOUR_STORE_PASSWORD|${{ secrets.KEYSTORE_PASSWORD }}|' build.json
+          sed -i 's|YOUR_ALIAS|${{ secrets.KEY_ALIAS }}|' build.json
+          sed -i 's|YOUR_KEY_PASSWORD|${{ secrets.KEY_PASSWORD }}|' build.json
+
+      - name: Build Release APK
+        run: |
+          cd Projects/SandboxAPK
+          cordova build android --release -- --packageType=apk --buildConfig=build.json
+
+      - name: Create dist directory and move APK
+        run: |
+          mkdir -p Projects/SandboxAPK/dist
+          mv Projects/SandboxAPK/platforms/android/app/build/outputs/apk/release/app-release.apk Projects/SandboxAPK/dist/
+
+      - name: Upload APK as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          path: Projects/SandboxAPK/dist/app-release.apk
