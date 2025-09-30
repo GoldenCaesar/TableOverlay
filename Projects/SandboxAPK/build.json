@@ -1,0 +1,11 @@
+{
+  "android": {
+    "release": {
+      "keystore": "placeholder.keystore",
+      "storePassword": "YOUR_STORE_PASSWORD",
+      "alias": "YOUR_ALIAS",
+      "password": "YOUR_KEY_PASSWORD",
+      "keystoreType": "JKS"
+    }
+  }
+}
