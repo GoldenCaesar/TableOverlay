@@ -1,11 +1,5 @@
-// This script adds the groovy-xml dependency to the buildscript classpath for all subprojects.
-// The error `unable to resolve class XmlParser` occurs because the Gradle build script itself
-// needs this dependency, not the application code. Adding it to the `buildscript` block
-// makes it available during the Gradle configuration and execution phase.
-rootProject.subprojects {
-    buildscript {
-        dependencies {
-            classpath 'org.codehaus.groovy:groovy-xml:3.0.9'
-        }
+buildscript {
+    dependencies {
+        classpath 'org.codehaus.groovy:groovy-xml:3.0.9'
     }
 }
