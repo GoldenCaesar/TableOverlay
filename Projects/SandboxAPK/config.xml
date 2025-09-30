@@ -8,4 +8,7 @@
     <content src="index.html" />
     <allow-intent href="http://*/*" />
     <allow-intent href="https://*/*" />
+    <platform name="android">
+        <resource-file src="build-extras.gradle" target="app/build-extras.gradle" />
+    </platform>
 </widget>

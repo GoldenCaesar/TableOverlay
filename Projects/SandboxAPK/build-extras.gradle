@@ -1,0 +1,14 @@
+// In this file you can add your custom build logic.
+// For example, you can hook into the Android build process adding extra Gradle dependencies:
+//
+// android {
+//     dependencies {
+//         implementation 'com.google.android.gms:play-services-auth:15.0.1'
+//     }
+// }
+
+android {
+    dependencies {
+        implementation 'org.codehaus.groovy:groovy-xml:3.0.9'
+    }
+}
