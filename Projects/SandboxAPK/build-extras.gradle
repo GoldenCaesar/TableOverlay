@@ -1,5 +1,11 @@
-buildscript {
-    dependencies {
-        classpath 'org.codehaus.groovy:groovy-xml:3.0.9'
+rootProject.subprojects {
+    buildscript {
+        repositories {
+            google()
+            mavenCentral()
+        }
+        dependencies {
+            classpath 'org.codehaus.groovy:groovy-xml:3.0.9'
+        }
     }
 }
