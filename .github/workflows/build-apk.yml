@@ -33,14 +33,14 @@ jobs:
           cd Projects/SandboxAPK
           cordova platform add android@12
 
-      - name: Decode Keystore and Replace Placeholders
+      - name: Generate Keystore and Replace Placeholders
         run: |
           cd Projects/SandboxAPK
-          echo "${{ secrets.KEYSTORE_B64 }}" | base64 --decode > release.keystore
+          keytool -genkey -v -keystore release.keystore -alias placeholder-alias -keyalg RSA -keysize 2048 -validity 10000 -storepass password -keypass password -dname "CN=Placeholder, OU=, O=, L=, S=, C=US"
           sed -i 's|"keystore": "placeholder.keystore"|"keystore": "release.keystore"|' build.json
-          sed -i 's|YOUR_STORE_PASSWORD|${{ secrets.KEYSTORE_PASSWORD }}|' build.json
-          sed -i 's|YOUR_ALIAS|${{ secrets.KEY_ALIAS }}|' build.json
-          sed -i 's|YOUR_KEY_PASSWORD|${{ secrets.KEY_PASSWORD }}|' build.json
+          sed -i 's|YOUR_STORE_PASSWORD|password|' build.json
+          sed -i 's|YOUR_ALIAS|placeholder-alias|' build.json
+          sed -i 's|YOUR_KEY_PASSWORD|password|' build.json
 
       - name: Build Release APK
         run: |
