@@ -1,0 +1,6 @@
+# Ignore the configuration file containing the API key
+config.ini
+
+# Ignore Python virtual environment folders
+venv/
+__pycache__/
