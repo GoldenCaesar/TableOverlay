@@ -1,6 +1,10 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 import tkintermapview
+from tkinter import scrolledtext
+import threading
+import queue
+import time
 import configparser
 import requests
 import pyperclip
@@ -32,6 +36,9 @@ class App(tk.Tk):
         self.markers = []
         self.route_path = None
         self.last_route_info = None
+        # Logging and threading
+        self.log_queue = queue.Queue()
+        self.worker_thread = None
 
         # --- GUI Setup ---
         main_frame = ttk.Frame(self)
@@ -88,7 +95,28 @@ class App(tk.Tk):
         self.map_widget.set_zoom(12)
         self.map_widget.add_right_click_menu_command(label="Add Pin at this location", command=self.add_pin_from_map, pass_coords=True)
 
+        # --- Footer (progress bar + log) ---
+        footer_frame = ttk.Frame(self)
+        footer_frame.pack(side=tk.BOTTOM, fill=tk.X)
+
+        progress_frame = ttk.Frame(footer_frame)
+        progress_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=8, pady=6)
+        self.progress = ttk.Progressbar(progress_frame, orient=tk.HORIZONTAL, mode='indeterminate')
+        self.progress.pack(fill=tk.X, expand=True)
+
+        log_frame = ttk.Frame(footer_frame)
+        log_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=8, pady=6)
+        self.log_widget = scrolledtext.ScrolledText(log_frame, height=6, state='disabled')
+        self.log_widget.pack(fill=tk.BOTH, expand=True)
+
+        clear_log_btn = ttk.Button(log_frame, text="Clear Log", command=self.clear_log)
+        clear_log_btn.pack(pady=4)
+
+        # Start polling the log queue to update UI from worker threads
+        self.after(100, self._process_log_queue)
+
     def calculate_route(self):
+        """Kick off route calculation in a background thread and show progress/log UI."""
         self.clear_route()
         if len(self.pins) < 1:
             messagebox.showwarning("Warning", "Please add at least one pin to calculate a route.")
@@ -100,37 +128,11 @@ class App(tk.Tk):
             messagebox.showerror("Error", "Please enter a valid number for the duration.")
             return
 
-        # Define the acceptable duration window
-        max_duration_minutes = target_duration_minutes * 1.25 + 10 # Allow 25% over plus 10 mins buffer
-
-        # First, calculate the direct route
-        route_pins = self.pins[:]
-        directions = self.get_directions_for_pins(route_pins)
-
-        if not directions:
-            return
-
-        initial_duration_minutes = self.get_route_duration(directions)
-
-        # If the route is too short, try to extend it
-        if initial_duration_minutes < target_duration_minutes:
-            messagebox.showinfo("Route Extending", f"Direct route is {initial_duration_minutes:.0f} mins. Searching for a detour to meet your {target_duration_minutes} min goal...")
-
-            best_extended_route = self.extend_route_iteratively(
-                route_pins, directions, target_duration_minutes, max_duration_minutes
-            )
-
-            if best_extended_route:
-                route_pins = best_extended_route['pins']
-                directions = best_extended_route['directions']
-            else:
-                messagebox.showwarning("Route Extension Failed", "Could not find a suitable detour within the time limits. Showing the direct route instead.")
-
-        # Finalize and display the route
-        self.last_route_info = {'directions': directions, 'pins': route_pins}
-        self.draw_route(directions)
-        self.display_final_duration(directions, target_duration_minutes)
-        self.share_button.config(state=tk.NORMAL)
+        # Disable UI elements that shouldn't be used while calculating
+        self.progress.start(10)
+        self.log(f"Starting route calculation for target {target_duration_minutes} minutes...")
+        self.worker_thread = threading.Thread(target=self._calculate_route_thread, args=(target_duration_minutes,), daemon=True)
+        self.worker_thread.start()
 
     def get_directions_for_pins(self, pins, silent=False):
         if not pins: return None
@@ -139,20 +141,24 @@ class App(tk.Tk):
         waypoints_str = "|".join([f"{p['lat']},{p['lng']}" for p in pins[1:]])
 
         url = f"https://maps.googleapis.com/maps/api/directions/json?origin={origin}&destination={destination}&waypoints={waypoints_str}&mode=walking&key={self.api_key}"
-
+        self.log(f"Calling Directions API: {url}")
         try:
             response = requests.get(url)
             response.raise_for_status()
             directions = response.json()
-            if directions['status'] == 'OK':
+            if directions.get('status') == 'OK':
+                self.log(f"Directions API returned OK. Route contains {len(directions['routes'][0]['legs'])} legs.")
                 return directions
             else:
+                self.log(f"Directions API returned status: {directions.get('status')} - {directions.get('error_message')}" )
                 if not silent:
-                    messagebox.showerror("Directions API Error", f"Could not find a route: {directions.get('error_message', directions['status'])}")
+                    # Show a message on the main thread
+                    self.after(0, lambda: messagebox.showerror("Directions API Error", f"Could not find a route: {directions.get('error_message', directions.get('status'))}"))
                 return None
         except requests.exceptions.RequestException as e:
+            self.log(f"Directions API connection error: {e}")
             if not silent:
-                messagebox.showerror("Connection Error", f"Failed to connect to Directions API: {e}")
+                self.after(0, lambda: messagebox.showerror("Connection Error", f"Failed to connect to Directions API: {e}"))
             return None
 
     def extend_route_iteratively(self, initial_pins, initial_directions, min_duration, max_duration):
@@ -170,6 +176,7 @@ class App(tk.Tk):
         poi_types = "park|tourist_attraction|cafe|library"
 
         for radius in [500, 1000, 2000, 4000]: # Search radiuses in meters
+            self.log(f"Searching Places API at radius {radius}m around midpoint {midpoint_lat:.5f},{midpoint_lng:.5f}")
             places_url = f"https://maps.googleapis.com/maps/api/place/nearbysearch/json?location={midpoint_lat},{midpoint_lng}&radius={radius}&type={poi_types}&rankby=prominence&key={self.api_key}"
 
             try:
@@ -177,20 +184,25 @@ class App(tk.Tk):
                 response.raise_for_status()
                 places = response.json()
 
-                if places['status'] == 'OK':
-                    for place in places['results']:
-                        # 3. For each POI, calculate a test route
+                if places.get('status') == 'OK':
+                    results = places.get('results', [])
+                    self.log(f"Places API returned {len(results)} candidates for radius {radius}m")
+                    for idx, place in enumerate(results, start=1):
                         poi_loc = place['geometry']['location']
-                        poi_pin = {'lat': poi_loc['lat'], 'lng': poi_loc['lng'], 'address': place['name']}
+                        poi_pin = {'lat': poi_loc['lat'], 'lng': poi_loc['lng'], 'address': place.get('name')}
+
+                        self.log(f"Testing POI {idx}/{len(results)}: {poi_pin['address']} at {poi_pin['lat']:.5f},{poi_pin['lng']:.5f}")
 
                         test_pins = initial_pins[:]
                         test_pins.insert(longest_leg_index + 1, poi_pin)
 
                         test_directions = self.get_directions_for_pins(test_pins, silent=True)
-                        if not test_directions: continue
+                        if not test_directions:
+                            self.log("Directions lookup for candidate failed or returned no route; skipping")
+                            continue
 
-                        # 4. Check if the duration is within our target window
                         test_duration = self.get_route_duration(test_directions)
+                        self.log(f"Candidate route duration: {test_duration:.1f} minutes")
                         if min_duration <= test_duration <= max_duration:
                             candidate = {
                                 'pins': test_pins,
@@ -198,11 +210,12 @@ class App(tk.Tk):
                                 'duration': test_duration,
                                 'diff': abs(test_duration - min_duration) # How close is it?
                             }
-                            # 5. If it's the best one so far, save it
                             if best_candidate is None or candidate['diff'] < best_candidate['diff']:
                                 best_candidate = candidate
+                                self.log(f"Found a new best candidate (diff {best_candidate['diff']:.1f} mins)")
 
-            except requests.exceptions.RequestException:
+            except requests.exceptions.RequestException as e:
+                self.log(f"Places API request failed for radius {radius}m: {e}. Continuing to next radius.")
                 continue # Ignore failures and try next radius
 
         return best_candidate # This will be None or the best route found
@@ -226,6 +239,7 @@ class App(tk.Tk):
         location = self.address_entry.get()
         if not location: return
         geocode_url = f"https://maps.googleapis.com/maps/api/geocode/json?address={location}&key={self.api_key}"
+        self.log(f"Calling Geocoding API for '{location}'")
         try:
             response = requests.get(geocode_url)
             response.raise_for_status()
@@ -244,6 +258,7 @@ class App(tk.Tk):
         lat, lng = coords
         rev_geocode_url = f"https://maps.googleapis.com/maps/api/geocode/json?latlng={lat},{lng}&key={self.api_key}"
         address = f"Lat: {lat:.5f}, Lng: {lng:.5f}"
+        self.log(f"Reverse geocoding pin at {lat:.5f},{lng:.5f}")
         try:
             response = requests.get(rev_geocode_url)
             response.raise_for_status()
@@ -260,6 +275,7 @@ class App(tk.Tk):
         self.markers.append(marker)
         self.update_pins_listbox()
         self.clear_route()
+        self.log(f"Added pin #{len(self.pins)}: {address} at {lat:.5f},{lng:.5f}")
 
     def remove_last_pin(self):
         if self.pins:
@@ -287,6 +303,11 @@ class App(tk.Tk):
         self.route_path = None
         self.share_button.config(state=tk.DISABLED)
         self.last_route_info = None
+        # stop progress if running
+        try:
+            self.progress.stop()
+        except Exception:
+            pass
 
     def share_route(self):
         if not self.last_route_info:
@@ -320,6 +341,71 @@ class App(tk.Tk):
                 else: lng += change
             coordinates.append((lat / 100000.0, lng / 100000.0))
         return coordinates
+
+    # --- Logging helpers and background worker ---
+    def log(self, message: str):
+        timestamp = time.strftime('%H:%M:%S')
+        self.log_queue.put(f"[{timestamp}] {message}")
+
+    def clear_log(self):
+        self.log_widget.config(state='normal')
+        self.log_widget.delete('1.0', tk.END)
+        self.log_widget.config(state='disabled')
+
+    def _process_log_queue(self):
+        """Called in the main thread via after() to flush queued log messages into the text widget."""
+        flushed = False
+        try:
+            while True:
+                msg = self.log_queue.get_nowait()
+                self.log_widget.config(state='normal')
+                self.log_widget.insert(tk.END, msg + '\n')
+                self.log_widget.see(tk.END)
+                self.log_widget.config(state='disabled')
+                flushed = True
+        except queue.Empty:
+            pass
+        # keep polling
+        self.after(100, self._process_log_queue)
+
+    def _calculate_route_thread(self, target_duration_minutes: int):
+        """Background thread target which performs the route calculation and then schedules UI updates."""
+        try:
+            max_duration_minutes = target_duration_minutes * 1.25 + 10
+            route_pins = self.pins[:]
+            self.log("Calculating initial direct route...")
+            directions = self.get_directions_for_pins(route_pins)
+
+            if not directions:
+                self.log("Initial directions lookup failed. Aborting calculation.")
+                self.after(0, lambda: self.progress.stop())
+                return
+
+            initial_duration_minutes = self.get_route_duration(directions)
+            if initial_duration_minutes < target_duration_minutes:
+                self.log(f"Direct route is {initial_duration_minutes:.0f} mins; searching for detours to reach {target_duration_minutes} mins...")
+                best_extended_route = self.extend_route_iteratively(route_pins, directions, target_duration_minutes, max_duration_minutes)
+                if best_extended_route:
+                    route_pins = best_extended_route['pins']
+                    directions = best_extended_route['directions']
+                    self.log(f"Extended route found: {best_extended_route['duration']:.1f} minutes")
+                else:
+                    self.log("Could not find a suitable detour; using direct route.")
+
+            # Schedule UI updates on main thread
+            def _finalize():
+                self.last_route_info = {'directions': directions, 'pins': route_pins}
+                self.draw_route(directions)
+                self.display_final_duration(directions, target_duration_minutes)
+                self.share_button.config(state=tk.NORMAL)
+                self.progress.stop()
+
+            self.after(0, _finalize)
+
+        except Exception as e:
+            self.log(f"Unexpected error during route calculation: {e}")
+            self.after(0, lambda: messagebox.showerror("Error", f"An unexpected error occurred: {e}"))
+            self.after(0, lambda: self.progress.stop())
 
 if __name__ == "__main__":
     app = App()
