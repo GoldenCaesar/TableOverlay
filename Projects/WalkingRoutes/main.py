@@ -169,65 +169,6 @@ class App(tk.Tk):
                 self.after(0, lambda: messagebox.showerror("Connection Error", f"Failed to connect to Directions API: {e}"))
             return None
 
-    def extend_route_iteratively(self, initial_pins, initial_directions, min_duration, max_duration):
-        # 1. Find the longest leg of the initial route
-        legs = initial_directions['routes'][0]['legs']
-        longest_leg_index = max(range(len(legs)), key=lambda i: legs[i]['duration']['value'])
-
-        start_leg = legs[longest_leg_index]['start_location']
-        end_leg = legs[longest_leg_index]['end_location']
-        midpoint_lat = (start_leg['lat'] + end_leg['lat']) / 2
-        midpoint_lng = (start_leg['lng'] + end_leg['lng']) / 2
-
-        # 2. Iteratively search for POIs in increasing radiuses
-        best_candidate = None
-        poi_types = "park|tourist_attraction|cafe|library"
-
-        for radius in [500, 1000, 2000, 4000]: # Search radiuses in meters
-            self.log(f"Searching Places API at radius {radius}m around midpoint {midpoint_lat:.5f},{midpoint_lng:.5f}")
-            places_url = f"https://maps.googleapis.com/maps/api/place/nearbysearch/json?location={midpoint_lat},{midpoint_lng}&radius={radius}&type={poi_types}&rankby=prominence&key={self.api_key}"
-
-            try:
-                response = requests.get(places_url)
-                response.raise_for_status()
-                places = response.json()
-
-                if places.get('status') == 'OK':
-                    results = places.get('results', [])
-                    self.log(f"Places API returned {len(results)} candidates for radius {radius}m")
-                    for idx, place in enumerate(results, start=1):
-                        poi_loc = place['geometry']['location']
-                        poi_pin = {'lat': poi_loc['lat'], 'lng': poi_loc['lng'], 'address': place.get('name')}
-
-                        self.log(f"Testing POI {idx}/{len(results)}: {poi_pin['address']} at {poi_pin['lat']:.5f},{poi_pin['lng']:.5f}")
-
-                        test_pins = initial_pins[:]
-                        test_pins.insert(longest_leg_index + 1, poi_pin)
-
-                        test_directions = self.get_directions_for_pins(test_pins, silent=True)
-                        if not test_directions:
-                            self.log("Directions lookup for candidate failed or returned no route; skipping")
-                            continue
-
-                        test_duration = self.get_route_duration(test_directions)
-                        self.log(f"Candidate route duration: {test_duration:.1f} minutes")
-                        if min_duration <= test_duration <= max_duration:
-                            candidate = {
-                                'pins': test_pins,
-                                'directions': test_directions,
-                                'duration': test_duration,
-                                'diff': abs(test_duration - min_duration) # How close is it?
-                            }
-                            if best_candidate is None or candidate['diff'] < best_candidate['diff']:
-                                best_candidate = candidate
-                                self.log(f"Found a new best candidate (diff {best_candidate['diff']:.1f} mins)")
-
-            except requests.exceptions.RequestException as e:
-                self.log(f"Places API request failed for radius {radius}m: {e}. Continuing to next radius.")
-                continue # Ignore failures and try next radius
-
-        return best_candidate # This will be None or the best route found
-
     def get_route_duration(self, directions):
         if not directions: return 0
         return sum(leg['duration']['value'] for leg in directions['routes'][0]['legs']) / 60
@@ -377,34 +318,52 @@ class App(tk.Tk):
         self.after(100, self._process_log_queue)
 
     def _calculate_route_thread(self, target_duration_minutes: int):
-        """Background thread target which performs the route calculation and then schedules UI updates."""
+        """
+        Background thread target. Dispatches to the correct route generation
+        logic based on the number of pins and then schedules UI updates.
+        """
         try:
-            max_duration_minutes = target_duration_minutes * 1.25 + 10
-            route_pins = self.pins[:]
-            self.log("Calculating initial direct route...")
-            directions = self.get_directions_for_pins(route_pins)
+            initial_pins = self.pins[:]
+            candidate_routes = []
 
-            if not directions:
-                self.log("Initial directions lookup failed. Aborting calculation.")
+            if len(initial_pins) == 1:
+                self.log("Single pin detected. Generating loop route...")
+                candidate_routes = self._generate_loop_route(initial_pins[0], target_duration_minutes)
+            else:
+                self.log(f"{len(initial_pins)} pins detected. Generating detour route...")
+                candidate_routes = self._generate_detour_route(initial_pins, target_duration_minutes)
+
+            if not candidate_routes:
+                self.log("No candidate routes could be generated.")
+                self.after(0, lambda: messagebox.showinfo("No Route Found", "Could not generate any valid routes. Please try a different location or duration."))
                 self.after(0, lambda: self.progress.stop())
                 return
 
-            initial_duration_minutes = self.get_route_duration(directions)
-            if initial_duration_minutes < target_duration_minutes:
-                self.log(f"Direct route is {initial_duration_minutes:.0f} mins; searching for detours to reach {target_duration_minutes} mins...")
-                best_extended_route = self.extend_route_iteratively(route_pins, directions, target_duration_minutes, max_duration_minutes)
-                if best_extended_route:
-                    route_pins = best_extended_route['pins']
-                    directions = best_extended_route['directions']
-                    self.log(f"Extended route found: {best_extended_route['duration']:.1f} minutes")
-                else:
-                    self.log("Could not find a suitable detour; using direct route.")
+            self.log(f"Scoring {len(candidate_routes)} candidate routes...")
+            best_route = None
+            best_score = float('inf')
+
+            for i, route in enumerate(candidate_routes):
+                self.log(f"Scoring candidate route #{i+1}...")
+                score = self._calculate_route_score(route, target_duration_minutes)
+                if score < best_score:
+                    best_score = score
+                    best_route = route
+                    self.log(f"New best route found: Candidate #{i+1} with score {score:.1f}")
+
+            if not best_route:
+                 self.log("All candidate routes failed scoring.")
+                 self.after(0, lambda: messagebox.showinfo("No Route Found", "Could not find a suitable route. All candidates were invalid or scored poorly."))
+                 self.after(0, lambda: self.progress.stop())
+                 return
+
+            self.log(f"Selected best route with final score: {best_score:.1f}")
 
             # Schedule UI updates on main thread
             def _finalize():
-                self.last_route_info = {'directions': directions, 'pins': route_pins}
-                self.draw_route(directions)
-                self.display_final_duration(directions, target_duration_minutes)
+                self.last_route_info = {'directions': best_route['directions'], 'pins': best_route['pins']}
+                self.draw_route(best_route['directions'])
+                self.display_final_duration(best_route['directions'], target_duration_minutes)
                 self.share_button.config(state=tk.NORMAL)
                 self.progress.stop()
 
@@ -412,8 +371,231 @@ class App(tk.Tk):
 
         except Exception as e:
             self.log(f"Unexpected error during route calculation: {e}")
+            # Use after() to ensure messagebox is called from the main thread
             self.after(0, lambda: messagebox.showerror("Error", f"An unexpected error occurred: {e}"))
             self.after(0, lambda: self.progress.stop())
+
+    def _generate_loop_route(self, start_pin, target_duration_minutes):
+        """
+        Generates candidate loop routes from a single starting point by creating
+        geometric anchor points.
+        """
+        candidate_routes = []
+        # Avg walking speed: ~3 mph or ~4.8 km/h. Let's use 4.5 km/h for calculation.
+        # km = (minutes / 60) * 4.5
+        # We are making a loop, so the farthest point is roughly at duration / 4
+        # (e.g., 60 min walk, out 15m, across 30m, back 15m)
+        # Radius in km for a quarter of the duration
+        radius_km = (target_duration_minutes / 4 / 60) * 4.5
+
+        # Convert radius from km to degrees of latitude/longitude
+        # 1 degree of latitude is ~111.1 km. Longitude varies.
+        lat_degree_per_km = 1 / 111.1
+        lng_degree_per_km = 1 / (111.1 * math.cos(math.radians(start_pin['lat'])))
+        radius_lat = radius_km * lat_degree_per_km
+        radius_lng = radius_km * lng_degree_per_km
+        self.log(f"Calculated walkable radius: {radius_km:.2f} km")
+
+        # --- Generate Anchor Point Sets ---
+        # Each anchor set is a list of dicts: {'lat': ..., 'lng': ...}
+        anchor_sets = []
+        # Set 1: Triangle
+        anchor_sets.append([
+            {'lat': start_pin['lat'] + radius_lat, 'lng': start_pin['lng']}, # North
+            {'lat': start_pin['lat'] - radius_lat * 0.5, 'lng': start_pin['lng'] + radius_lng * 0.866}, # Southeast
+            {'lat': start_pin['lat'] - radius_lat * 0.5, 'lng': start_pin['lng'] - radius_lng * 0.866}, # Southwest
+        ])
+        # Set 2: Square
+        anchor_sets.append([
+            {'lat': start_pin['lat'] + radius_lat, 'lng': start_pin['lng'] - radius_lng}, # Northwest
+            {'lat': start_pin['lat'] + radius_lat, 'lng': start_pin['lng'] + radius_lng}, # Northeast
+            {'lat': start_pin['lat'] - radius_lat, 'lng': start_pin['lng'] + radius_lng}, # Southeast
+            {'lat': start_pin['lat'] - radius_lat, 'lng': start_pin['lng'] - radius_lng}, # Southwest
+        ])
+        # Set 3: A wider 'diamond' shape
+        anchor_sets.append([
+             {'lat': start_pin['lat'] + radius_lat * 0.7, 'lng': start_pin['lng']}, # North
+             {'lat': start_pin['lat'], 'lng': start_pin['lng'] + radius_lng * 1.5},      # East
+             {'lat': start_pin['lat'] - radius_lat * 0.7, 'lng': start_pin['lng']}, # South
+             {'lat': start_pin['lat'], 'lng': start_pin['lng'] - radius_lng * 1.5},      # West
+        ])
+
+        # --- Generate Candidate Routes ---
+        self.log(f"Generating routes for {len(anchor_sets)} geometric shapes...")
+        for i, anchors in enumerate(anchor_sets):
+            # Create the full list of waypoints for the API call
+            # The route is Start -> A1 -> A2 -> ... -> Start
+            route_pins = [start_pin] + anchors
+            self.log(f"Shape {i+1}: Requesting route with {len(anchors)} anchors.")
+            directions = self.get_directions_for_pins(route_pins, silent=True)
+            if directions:
+                duration = self.get_route_duration(directions)
+                self.log(f"Shape {i+1}: Route generated, duration {duration:.1f} mins.")
+                candidate_routes.append({
+                    'directions': directions,
+                    'pins': route_pins, # Store the pins including anchors
+                    'duration': duration,
+                })
+            else:
+                self.log(f"Shape {i+1}: Could not generate a route for this shape.")
+        return candidate_routes
+
+
+    def _generate_detour_route(self, initial_pins, target_duration_minutes):
+        """
+        Generates detour routes if the initial user-pinned route is shorter than
+        the target duration.
+        """
+        candidate_routes = []
+        self.log("Calculating direct route for comparison...")
+        initial_directions = self.get_directions_for_pins(initial_pins, silent=True)
+        if not initial_directions:
+            self.log("Could not calculate the initial direct route.")
+            return []
+
+        initial_duration = self.get_route_duration(initial_directions)
+        self.log(f"Initial route duration: {initial_duration:.1f} minutes.")
+        # Add the original route as the first candidate
+        candidate_routes.append({
+            'directions': initial_directions,
+            'pins': initial_pins,
+            'duration': initial_duration,
+        })
+
+        # If the direct route is already long enough, no need for detours
+        if initial_duration >= target_duration_minutes:
+            self.log("Initial route is already long enough. No detours needed.")
+        else:
+            self.log(f"Initial route is shorter than target, generating detours...")
+            # --- Identify Longest Leg for Detour ---
+            legs = initial_directions['routes'][0]['legs']
+            # Note: The "legs" correspond to the segments between the waypoints provided
+            # to the API. If we have Start, P1, P2, the legs are Start->P1, P1->P2, P2->Start.
+            longest_leg_index = max(range(len(legs)), key=lambda i: legs[i]['duration']['value'])
+            leg_to_detour = legs[longest_leg_index]
+            self.log(f"Longest leg is #{longest_leg_index+1} (duration: {leg_to_detour['duration']['value']/60:.1f} mins).")
+
+            # --- Generate Detour Anchors ---
+            # Find the midpoint of the longest leg
+            start_leg = leg_to_detour['start_location']
+            end_leg = leg_to_detour['end_location']
+            midpoint = {
+                'lat': (start_leg['lat'] + end_leg['lat']) / 2,
+                'lng': (start_leg['lng'] + end_leg['lng']) / 2
+            }
+            # Calculate a detour distance (similar to loop radius calculation)
+            duration_to_add = target_duration_minutes - initial_duration
+            # A detour adds roughly 2x its "radius" in time.
+            detour_km = (duration_to_add / 2 / 60) * 4.5
+            lat_degree_per_km = 1 / 111.1
+            lng_degree_per_km = 1 / (111.1 * math.cos(math.radians(midpoint['lat'])))
+            detour_lat = detour_km * lat_degree_per_km
+            detour_lng = detour_km * lng_degree_per_km
+            self.log(f"Calculated detour distance: {detour_km:.2f} km")
+
+            # Create two anchor points, one on each side of the leg's midpoint
+            # The direction of the "side" is perpendicular to the leg's direction
+            leg_vec = {'lat': end_leg['lat'] - start_leg['lat'], 'lng': end_leg['lng'] - start_leg['lng']}
+            perp_vec1 = {'lat': -leg_vec['lng'], 'lng': leg_vec['lat']} # Perpendicular vector
+            perp_vec2 = {'lat': leg_vec['lng'], 'lng': -leg_vec['lat']} # Other side
+
+            detour_anchors = []
+            for vec in [perp_vec1, perp_vec2]:
+                # Normalize the perpendicular vector
+                vec_mag = math.sqrt(vec['lat']**2 + vec['lng']**2)
+                if vec_mag == 0: continue
+                norm_vec = {'lat': vec['lat']/vec_mag, 'lng': vec['lng']/vec_mag}
+                # Create anchor by moving from midpoint along the normalized perpendicular vector
+                detour_anchors.append({
+                    'lat': midpoint['lat'] + norm_vec['lat'] * lat_degree_per_km * detour_km,
+                    'lng': midpoint['lng'] + norm_vec['lng'] * lng_degree_per_km * detour_km,
+                })
+
+            # --- Generate and Test Detour Routes ---
+            self.log(f"Generating routes for {len(detour_anchors)} detour anchors...")
+            for i, anchor in enumerate(detour_anchors):
+                # Insert the anchor into the pin list *after* the start of the longest leg
+                test_pins = initial_pins[:]
+                test_pins.insert(longest_leg_index + 1, anchor)
+                self.log(f"Detour {i+1}: Requesting route with new anchor.")
+                directions = self.get_directions_for_pins(test_pins, silent=True)
+                if directions:
+                    duration = self.get_route_duration(directions)
+                    self.log(f"Detour {i+1}: Route generated, duration {duration:.1f} mins.")
+                    candidate_routes.append({
+                        'directions': directions,
+                        'pins': test_pins,
+                        'duration': duration,
+                    })
+                else:
+                    self.log(f"Detour {i+1}: Could not generate a route for this anchor.")
+        return candidate_routes
+
+    def _calculate_route_score(self, route, target_duration_minutes):
+        """
+        Calculates a score for a given route based on duration, overlap, and road types.
+        Lower score is better.
+        """
+        # --- 1. Duration Score ---
+        # Penalize routes that are too far from the target duration.
+        # We use a percentage difference to make it fair for short vs long walks.
+        duration_diff = abs(route['duration'] - target_duration_minutes)
+        duration_score = (duration_diff / target_duration_minutes) * 100 # Percentage difference as a score
+        self.log(f"  - Duration score: {duration_score:.1f} (target: {target_duration_minutes}, actual: {route['duration']:.1f})")
+
+        # --- 2. Overlap Score ---
+        # Decode all polylines and count how many times each segment is used.
+        # We round coordinates to a certain precision to catch segments that are
+        # practically the same but have minor float differences.
+        all_segments = []
+        precision = 5 # 5 decimal places is ~1.1 meters. Good enough to catch same-road travel.
+        for leg in route['directions']['routes'][0]['legs']:
+            for step in leg['steps']:
+                points = self.decode_polyline(step['polyline']['points'])
+                # Create segments (pairs of coordinates) from the decoded points
+                for i in range(len(points) - 1):
+                    p1 = (round(points[i][0], precision), round(points[i][1], precision))
+                    p2 = (round(points[i+1][0], precision), round(points[i+1][1], precision))
+                    # Normalize segment direction by always having the smaller lat first
+                    all_segments.append(tuple(sorted((p1, p2))))
+
+        segment_counts = {}
+        for segment in all_segments:
+            segment_counts[segment] = segment_counts.get(segment, 0) + 1
+
+        # Penalize heavily for each segment that is used more than once.
+        overlap_penalty = 0
+        overlapped_segment_count = 0
+        for count in segment_counts.values():
+            if count > 1:
+                # The penalty increases exponentially with more overlaps on the same segment
+                overlap_penalty += (count - 1) * 25 # e.g., used twice = 25 penalty, thrice = 50
+                overlapped_segment_count += 1
+
+        self.log(f"  - Overlap score: {overlap_penalty} ({overlapped_segment_count} overlapped segments)")
+
+        # --- 3. Road Type Score ---
+        # Heuristic: Penalize routes that use major road keywords.
+        road_type_penalty = 0
+        major_road_keywords = ['highway', 'hwy', 'blvd', 'boulevard', 'ave', 'avenue', 'freeway', 'expressway']
+        instructions = ""
+        for leg in route['directions']['routes'][0]['legs']:
+            for step in leg['steps']:
+                instructions += step.get('html_instructions', '').lower() + " "
+
+        for keyword in major_road_keywords:
+            count = instructions.count(keyword)
+            if count > 0:
+                self.log(f"    - Found '{keyword}' {count} times in instructions.")
+                road_type_penalty += count * 5
+
+        self.log(f"  - Road Type score: {road_type_penalty}")
+
+        # --- Final Score ---
+        # Weights can be tuned. Let's make overlap very important.
+        final_score = (duration_score * 1.5) + (overlap_penalty * 3.0) + (road_type_penalty * 1.0)
+        self.log(f"  - TOTAL SCORE (lower is better): {final_score:.1f}")
+        return final_score
 
 if __name__ == "__main__":
     app = App()
