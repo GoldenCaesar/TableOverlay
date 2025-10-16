@@ -467,6 +467,37 @@ class App(tk.Tk):
             self.log("Initial route is already long enough. No detours needed.")
         else:
             self.log(f"Initial route is shorter than target, generating detours...")
+    def _check_for_traffic_lights(self, route_points):
+        """
+        Queries the OpenStreetMap Overpass API to find traffic signals along a route.
+        """
+        self.log("Checking route for traffic lights via Overpass API...")
+        overpass_url = "https://overpass-api.de/api/interpreter"
+        # Build a query that looks for traffic signals within a radius of each point in the route
+        # Using a polyline is more efficient than querying every single point
+        polyline = " ".join([f"{lat} {lng}" for lat, lng in route_points])
+        query = f"""
+        [out:json];
+        (
+          node(around:20, {polyline})["highway"="traffic_signals"];
+        );
+        out count;
+        """
+        try:
+            response = requests.post(overpass_url, data={'data': query})
+            response.raise_for_status()
+            data = response.json()
+            # The 'total' count is available in the 'counts' element
+            count = int(data.get('elements', [{}])[0].get('tags', {}).get('total', 0))
+            self.log(f"Overpass API found {count} traffic signals.")
+            return count
+        except requests.exceptions.RequestException as e:
+            self.log(f"Overpass API request failed: {e}. Skipping traffic light check.")
+            return 0 # Return 0 if the API fails, so we don't unfairly penalize a good route
+        except (ValueError, IndexError, KeyError) as e:
+            self.log(f"Could not parse Overpass API response: {e}. Skipping traffic light check.")
+            return 0
+
             # --- Identify Longest Leg for Detour ---
             legs = initial_directions['routes'][0]['legs']
             # Note: The "legs" correspond to the segments between the waypoints provided
@@ -574,26 +605,25 @@ class App(tk.Tk):
 
         self.log(f"  - Overlap score: {overlap_penalty} ({overlapped_segment_count} overlapped segments)")
 
-        # --- 3. Road Type Score ---
-        # Heuristic: Penalize routes that use major road keywords.
-        road_type_penalty = 0
-        major_road_keywords = ['highway', 'hwy', 'blvd', 'boulevard', 'ave', 'avenue', 'freeway', 'expressway']
-        instructions = ""
-        for leg in route['directions']['routes'][0]['legs']:
-            for step in leg['steps']:
-                instructions += step.get('html_instructions', '').lower() + " "
+        # --- 3. Road Type Score (Traffic Light Penalty) ---
+        traffic_light_penalty = 0
+        if self.avoid_highways_var.get():
+            # Only check for traffic lights if the user has toggled the option
+            all_points = []
+            for leg in route['directions']['routes'][0]['legs']:
+                for step in leg['steps']:
+                    all_points.extend(self.decode_polyline(step['polyline']['points']))
 
-        for keyword in major_road_keywords:
-            count = instructions.count(keyword)
-            if count > 0:
-                self.log(f"    - Found '{keyword}' {count} times in instructions.")
-                road_type_penalty += count * 5
-
-        self.log(f"  - Road Type score: {road_type_penalty}")
+            traffic_light_count = self._check_for_traffic_lights(all_points)
+            # Assign a very high penalty for each traffic light found
+            traffic_light_penalty = traffic_light_count * 50
+            self.log(f"  - Traffic Light score: {traffic_light_penalty} ({traffic_light_count} lights found)")
+        else:
+            self.log("  - Traffic Light score: 0 (check skipped by user)")
 
         # --- Final Score ---
-        # Weights can be tuned. Let's make overlap very important.
-        final_score = (duration_score * 1.5) + (overlap_penalty * 3.0) + (road_type_penalty * 1.0)
+        # Weights can be tuned. Let's make overlap and traffic lights very important.
+        final_score = (duration_score * 1.5) + (overlap_penalty * 5.0) + traffic_light_penalty
         self.log(f"  - TOTAL SCORE (lower is better): {final_score:.1f}")
         return final_score
 
