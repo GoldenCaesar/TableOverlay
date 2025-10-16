@@ -66,6 +66,10 @@ class App(tk.Tk):
         self.duration_entry.pack(fill=tk.X)
         self.duration_entry.insert(0, "120")
 
+        self.avoid_highways_var = tk.BooleanVar()
+        self.avoid_highways_check = ttk.Checkbutton(control_frame, text="Prevent routes on Main Roads", variable=self.avoid_highways_var)
+        self.avoid_highways_check.pack(pady=10, anchor='w')
+
         calculate_button = ttk.Button(control_frame, text="Calculate Route", command=self.calculate_route)
         calculate_button.pack(pady=20)
 
@@ -141,6 +145,10 @@ class App(tk.Tk):
         waypoints_str = "|".join([f"{p['lat']},{p['lng']}" for p in pins[1:]])
 
         url = f"https://maps.googleapis.com/maps/api/directions/json?origin={origin}&destination={destination}&waypoints={waypoints_str}&mode=walking&key={self.api_key}"
+        if self.avoid_highways_var.get():
+            url += "&avoid=highways|tolls|ferries"
+            self.log("Avoiding highways, tolls, and ferries for this route.")
+
         self.log(f"Calling Directions API: {url}")
         try:
             response = requests.get(url)
