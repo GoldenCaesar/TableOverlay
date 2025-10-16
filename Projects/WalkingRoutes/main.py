@@ -15,15 +15,16 @@ class App(tk.Tk):
 
         # --- Load API key securely ---
         try:
+            # Look for config.ini in the same directory as the script
             script_dir = os.path.dirname(__file__)
             config_path = os.path.join(script_dir, 'config.ini')
             config = configparser.ConfigParser()
             if not os.path.exists(config_path):
-                 raise FileNotFoundError("config.ini not found.")
+                 raise FileNotFoundError("config.ini not found in the script directory.")
             config.read(config_path)
             self.api_key = config['google_maps']['api_key']
         except Exception as e:
-            messagebox.showerror("Configuration Error", f"Could not load API key from 'config.ini'. Please ensure the file exists in the same directory as the script and is correctly formatted.\n\nError: {e}")
+            messagebox.showerror("Configuration Error", f"Could not load API key from 'config.ini'.\n\nError: {e}")
             self.destroy()
             return
 
@@ -52,7 +53,7 @@ class App(tk.Tk):
         search_button = ttk.Button(control_frame, text="Search", command=self.search_location)
         search_button.pack(pady=5, anchor='w')
 
-        duration_label = ttk.Label(control_frame, text="Minimum walk duration (minutes):")
+        duration_label = ttk.Label(control_frame, text="Target walk duration (minutes):")
         duration_label.pack(pady=(10, 5), anchor='w')
         self.duration_entry = ttk.Entry(control_frame)
         self.duration_entry.pack(fill=tk.X)
@@ -87,8 +88,6 @@ class App(tk.Tk):
         self.map_widget.set_zoom(12)
         self.map_widget.add_right_click_menu_command(label="Add Pin at this location", command=self.add_pin_from_map, pass_coords=True)
 
-    # ... (Pin and map interaction methods remain largely the same) ...
-
     def calculate_route(self):
         self.clear_route()
         if len(self.pins) < 1:
@@ -96,39 +95,44 @@ class App(tk.Tk):
             return
 
         try:
-            min_duration_minutes = int(self.duration_entry.get())
+            target_duration_minutes = int(self.duration_entry.get())
         except ValueError:
             messagebox.showerror("Error", "Please enter a valid number for the duration.")
             return
+
+        # Define the acceptable duration window
+        max_duration_minutes = target_duration_minutes * 1.25 + 10 # Allow 25% over plus 10 mins buffer
 
         # First, calculate the direct route
         route_pins = self.pins[:]
         directions = self.get_directions_for_pins(route_pins)
 
         if not directions:
-            return # Error already shown in get_directions_for_pins
+            return
 
-        total_duration_minutes = self.get_route_duration(directions)
+        initial_duration_minutes = self.get_route_duration(directions)
 
         # If the route is too short, try to extend it
-        if total_duration_minutes < min_duration_minutes:
-            messagebox.showinfo("Route Extending", f"Direct route is {total_duration_minutes:.0f} mins. Trying to extend it to meet your {min_duration_minutes} min goal...")
-            extended_pins = self.extend_route(route_pins, directions, min_duration_minutes - total_duration_minutes)
-            if extended_pins:
-                extended_directions = self.get_directions_for_pins(extended_pins)
-                if extended_directions:
-                    route_pins = extended_pins
-                    directions = extended_directions
+        if initial_duration_minutes < target_duration_minutes:
+            messagebox.showinfo("Route Extending", f"Direct route is {initial_duration_minutes:.0f} mins. Searching for a detour to meet your {target_duration_minutes} min goal...")
+
+            best_extended_route = self.extend_route_iteratively(
+                route_pins, directions, target_duration_minutes, max_duration_minutes
+            )
+
+            if best_extended_route:
+                route_pins = best_extended_route['pins']
+                directions = best_extended_route['directions']
             else:
-                messagebox.showwarning("Route Extension Failed", "Could not find a suitable point of interest to extend the route. Showing the direct route instead.")
+                messagebox.showwarning("Route Extension Failed", "Could not find a suitable detour within the time limits. Showing the direct route instead.")
 
         # Finalize and display the route
         self.last_route_info = {'directions': directions, 'pins': route_pins}
         self.draw_route(directions)
-        self.display_final_duration(directions, min_duration_minutes)
+        self.display_final_duration(directions, target_duration_minutes)
         self.share_button.config(state=tk.NORMAL)
 
-    def get_directions_for_pins(self, pins):
+    def get_directions_for_pins(self, pins, silent=False):
         if not pins: return None
         origin = f"{pins[0]['lat']},{pins[0]['lng']}"
         destination = origin
@@ -143,70 +147,81 @@ class App(tk.Tk):
             if directions['status'] == 'OK':
                 return directions
             else:
-                messagebox.showerror("Directions API Error", f"Could not find a route: {directions.get('error_message', directions['status'])}")
+                if not silent:
+                    messagebox.showerror("Directions API Error", f"Could not find a route: {directions.get('error_message', directions['status'])}")
                 return None
         except requests.exceptions.RequestException as e:
-            messagebox.showerror("Connection Error", f"Failed to connect to Directions API: {e}")
+            if not silent:
+                messagebox.showerror("Connection Error", f"Failed to connect to Directions API: {e}")
             return None
 
-    def extend_route(self, pins, directions, needed_duration_mins):
-        # 1. Find the longest leg
-        legs = directions['routes'][0]['legs']
-        longest_leg_index = -1
-        max_duration = -1
-        for i, leg in enumerate(legs):
-            if leg['duration']['value'] > max_duration:
-                max_duration = leg['duration']['value']
-                longest_leg_index = i
+    def extend_route_iteratively(self, initial_pins, initial_directions, min_duration, max_duration):
+        # 1. Find the longest leg of the initial route
+        legs = initial_directions['routes'][0]['legs']
+        longest_leg_index = max(range(len(legs)), key=lambda i: legs[i]['duration']['value'])
 
-        if longest_leg_index == -1: return None
-
-        # 2. Find midpoint of the longest leg
         start_leg = legs[longest_leg_index]['start_location']
         end_leg = legs[longest_leg_index]['end_location']
         midpoint_lat = (start_leg['lat'] + end_leg['lat']) / 2
         midpoint_lng = (start_leg['lng'] + end_leg['lng']) / 2
 
-        # 3. Search for a POI (park) nearby using Places API
-        # Search radius based on needed duration - very rough heuristic
-        radius_meters = max(2000, needed_duration_mins * 80 * 1.5) # 80m/min walking speed
-        places_url = f"https://maps.googleapis.com/maps/api/place/nearbysearch/json?location={midpoint_lat},{midpoint_lng}&radius={radius_meters}&type=park&rankby=prominence&key={self.api_key}"
+        # 2. Iteratively search for POIs in increasing radiuses
+        best_candidate = None
+        poi_types = "park|tourist_attraction|cafe|library"
 
-        try:
-            response = requests.get(places_url)
-            response.raise_for_status()
-            places = response.json()
+        for radius in [500, 1000, 2000, 4000]: # Search radiuses in meters
+            places_url = f"https://maps.googleapis.com/maps/api/place/nearbysearch/json?location={midpoint_lat},{midpoint_lng}&radius={radius}&type={poi_types}&rankby=prominence&key={self.api_key}"
 
-            if places['status'] == 'OK' and places['results']:
-                # 4. Add the first POI found as a new waypoint
-                poi = places['results'][0]['geometry']['location']
-                poi_pin = {'lat': poi['lat'], 'lng': poi['lng'], 'address': places['results'][0]['name']}
+            try:
+                response = requests.get(places_url)
+                response.raise_for_status()
+                places = response.json()
 
-                # Insert the new pin into the route
-                new_pins = pins[:]
-                new_pins.insert(longest_leg_index + 1, poi_pin)
-                return new_pins
-        except requests.exceptions.RequestException:
-            return None # Failed to fetch places
+                if places['status'] == 'OK':
+                    for place in places['results']:
+                        # 3. For each POI, calculate a test route
+                        poi_loc = place['geometry']['location']
+                        poi_pin = {'lat': poi_loc['lat'], 'lng': poi_loc['lng'], 'address': place['name']}
 
-        return None # No places found
+                        test_pins = initial_pins[:]
+                        test_pins.insert(longest_leg_index + 1, poi_pin)
+
+                        test_directions = self.get_directions_for_pins(test_pins, silent=True)
+                        if not test_directions: continue
+
+                        # 4. Check if the duration is within our target window
+                        test_duration = self.get_route_duration(test_directions)
+                        if min_duration <= test_duration <= max_duration:
+                            candidate = {
+                                'pins': test_pins,
+                                'directions': test_directions,
+                                'duration': test_duration,
+                                'diff': abs(test_duration - min_duration) # How close is it?
+                            }
+                            # 5. If it's the best one so far, save it
+                            if best_candidate is None or candidate['diff'] < best_candidate['diff']:
+                                best_candidate = candidate
+
+            except requests.exceptions.RequestException:
+                continue # Ignore failures and try next radius
+
+        return best_candidate # This will be None or the best route found
 
     def get_route_duration(self, directions):
         if not directions: return 0
-        total_duration_seconds = sum(leg['duration']['value'] for leg in directions['routes'][0]['legs'])
-        return total_duration_seconds / 60
+        return sum(leg['duration']['value'] for leg in directions['routes'][0]['legs']) / 60
 
-    def display_final_duration(self, directions, min_duration_minutes):
+    def display_final_duration(self, directions, target_duration_minutes):
         total_duration_minutes = self.get_route_duration(directions)
         message = f"The calculated route takes approximately {total_duration_minutes:.0f} minutes."
-        if total_duration_minutes < min_duration_minutes:
-            message += f"\n\nThis is shorter than your {min_duration_minutes} minute goal. The app could not extend it further."
+        if total_duration_minutes < target_duration_minutes:
+            message += f"\n\nThis is shorter than your {target_duration_minutes} minute goal. The app could not find a suitable detour to extend it further."
+        elif total_duration_minutes > target_duration_minutes * 1.1:
+             message += f"\n\nThis is a bit longer than your goal, but it was the best option found."
         messagebox.showinfo("Route Calculated", message)
 
-    # ... (Other methods like draw_route, share_route, decode_polyline, etc. are needed) ...
-    # For brevity, only showing the core logic change. Let's assume the other methods are here and correct.
-    # The following are copied from the previous version to make the file complete.
-
+    # --- Other methods (add_pin, remove_pin, draw_route, etc.) ---
+    # These methods are unchanged from the previous version.
     def search_location(self, event=None):
         location = self.address_entry.get()
         if not location: return
